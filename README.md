@@ -66,20 +66,35 @@ You should see a status line once per second reporting both thermistor ADC
 readings. Set `pico_enable_stdio_uart(... 1)` in `CMakeLists.txt` to also use a
 hardware UART.
 
-## What the skeleton does
+## What the firmware does
 
-`main.c` is intentionally a **safe** starting point, not a motion controller:
+On boot `main.c`:
 
-- heaters forced **OFF** and steppers **DISABLED** on boot,
-- part-cooling fan attached to a PWM slice,
-- both 100k NTC thermistors sampled on the RP2040 ADC,
-- status printed over USB.
+- forces heaters **OFF** and all steppers **DISABLED** (fail-safe first),
+- configures the **E-axis TMC2209 over UART** (UART1, TX `GP8` / RX `GP9`):
+  internal current reference, 1/16 microstepping w/ 256-interpolation, moderate
+  run current — see [src/tmc2209.c](src/tmc2209.c),
+- enables the E driver and **continuously rotates the motor**, reversing every
+  ~2 revolutions,
+- samples both 100k NTC thermistors on the ADC and prints a status line over USB.
 
-Raw ADC counts are reported as-is — converting to °C needs an NTC
-(Beta/Steinhart-Hart) model for your specific thermistor, plus the board's
-divider resistor. Add that next, along with TMC2209 UART setup (`gpio8/9`),
-step/dir motion, and endstop handling. All pins are defined in
-[src/skr_pico.h](src/skr_pico.h).
+> **Motors are powered from the board's VM input (a stepper PSU), not USB.**
+> With USB only, the driver configures fine but the motor will not turn. Make
+> sure an E-axis stepper is plugged into the **E** port and VM power is applied.
+
+### Tuning the motion
+
+In [src/main.c](src/main.c): `STEP_LOW_US` sets the step rate (≈5 kHz default),
+`MICROSTEPS` must match the value programmed in `tmc2209_configure()`, and the
+run/hold current lives in the `IHOLD_IRUN` write in
+[src/tmc2209.c](src/tmc2209.c) (`IRUN=16/31` ≈ half scale — lower it if the
+motor runs hot, raise it for more torque).
+
+### Not yet implemented
+
+°C conversion (needs a Beta/Steinhart-Hart model for your thermistor + the
+board divider), the other three axes, endstop/probe handling, and acceleration
+ramping. All pins are defined in [src/skr_pico.h](src/skr_pico.h).
 
 ## Pin reference (RP2040 GPIO)
 

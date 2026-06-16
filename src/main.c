@@ -1,21 +1,30 @@
 /*
- * SKR Pico v1.0 — bring-up firmware skeleton.
+ * SKR Pico v1.0 — spin the E (extruder) stepper.
  *
- * This is a safe starting point, not a motion controller. On boot it:
- *   - puts the board in a known-safe state (heaters OFF, steppers DISABLED),
- *   - configures the part-cooling fan on a PWM slice,
- *   - reads both 100k NTC thermistors on the RP2040 ADC,
- *   - prints a status line over USB-CDC once per second.
+ * On boot it puts the board in a safe state (heaters OFF, all steppers
+ * disabled), configures the E-axis TMC2209 over UART (current + 1/16
+ * microstepping), then continuously rotates the motor, reversing every couple
+ * of revolutions. Thermistor ADC readings are printed over USB before each
+ * move.
  *
- * Build produces skr_pico_fw.uf2; flash via BOOTSEL (see README).
+ * NOTE: motors are powered from the board's VM input (stepper PSU), NOT from
+ * USB. With USB only, config succeeds but the motor will not turn.
  */
 #include <stdio.h>
 #include "pico/stdlib.h"
 #include "hardware/adc.h"
-#include "hardware/pwm.h"
 #include "skr_pico.h"
+#include "tmc2209.h"
 
-/* TMC2209 ENABLE is active-low: drive HIGH to leave motors de-energized. */
+/* 1.8° motor (200 full steps/rev) at 1/16 microstepping. */
+#define MICROSTEPS         16
+#define FULL_STEPS_PER_REV 200
+#define STEPS_PER_REV      (FULL_STEPS_PER_REV * MICROSTEPS)
+
+#define STEP_HIGH_US       3     /* TMC2209 needs only ~100 ns; 3 µs is safe */
+#define STEP_LOW_US        200   /* gap between pulses -> ~5 kHz step rate    */
+
+/* TMC2209 ENABLE is active-low: HIGH = de-energized. */
 static void steppers_disable(void) {
     const uint en_pins[] = {
         SKR_X_ENABLE_PIN, SKR_Y_ENABLE_PIN,
@@ -24,31 +33,48 @@ static void steppers_disable(void) {
     for (size_t i = 0; i < count_of(en_pins); i++) {
         gpio_init(en_pins[i]);
         gpio_set_dir(en_pins[i], GPIO_OUT);
-        gpio_put(en_pins[i], 1); /* disabled */
+        gpio_put(en_pins[i], 1);
     }
 }
 
-/* Heaters are low-side N-FETs: drive LOW = off. Never leave these floating. */
+/* Heaters are low-side N-FETs: LOW = off. Never leave these floating. */
 static void heaters_off(void) {
     const uint heat_pins[] = { SKR_HOTEND_HEATER_PIN, SKR_BED_HEATER_PIN };
     for (size_t i = 0; i < count_of(heat_pins); i++) {
         gpio_init(heat_pins[i]);
         gpio_set_dir(heat_pins[i], GPIO_OUT);
-        gpio_put(heat_pins[i], 0); /* off */
+        gpio_put(heat_pins[i], 0);
     }
 }
 
-/* Configure one GPIO as a PWM output and return its slice number. */
-static uint fan_pwm_init(uint pin) {
-    gpio_set_function(pin, GPIO_FUNC_PWM);
-    uint slice = pwm_gpio_to_slice_num(pin);
-    pwm_set_wrap(slice, 255);            /* 8-bit duty */
-    pwm_set_gpio_level(pin, 0);          /* start off */
-    pwm_set_enabled(slice, true);
-    return slice;
+static void e_axis_init(void) {
+    gpio_init(SKR_E_STEP_PIN);
+    gpio_set_dir(SKR_E_STEP_PIN, GPIO_OUT);
+    gpio_put(SKR_E_STEP_PIN, 0);
+
+    gpio_init(SKR_E_DIR_PIN);
+    gpio_set_dir(SKR_E_DIR_PIN, GPIO_OUT);
+    gpio_put(SKR_E_DIR_PIN, 0);
 }
 
-/* Read a thermistor channel and return the raw 12-bit ADC value (0..4095). */
+static void e_set_dir(bool forward) {
+    gpio_put(SKR_E_DIR_PIN, forward ? 1 : 0);
+}
+
+static void e_enable(bool on) {
+    gpio_put(SKR_E_ENABLE_PIN, on ? 0 : 1); /* active-low */
+}
+
+/* Emit `count` step pulses on the E axis at the configured rate. */
+static void e_step(uint32_t count) {
+    for (uint32_t i = 0; i < count; i++) {
+        gpio_put(SKR_E_STEP_PIN, 1);
+        sleep_us(STEP_HIGH_US);
+        gpio_put(SKR_E_STEP_PIN, 0);
+        sleep_us(STEP_LOW_US);
+    }
+}
+
 static uint16_t therm_read_raw(uint adc_channel) {
     adc_select_input(adc_channel);
     return adc_read();
@@ -57,28 +83,33 @@ static uint16_t therm_read_raw(uint adc_channel) {
 int main(void) {
     stdio_init_all();
 
-    /* Fail safe first, before anything else can go wrong. */
+    /* Fail safe before anything else. */
     heaters_off();
     steppers_disable();
 
-    /* Thermistor inputs on the ADC. init_pin wires the GPIO to the ADC mux. */
     adc_init();
     adc_gpio_init(SKR_HOTEND_THERM_PIN);
     adc_gpio_init(SKR_BED_THERM_PIN);
 
-    /* Part-cooling fan on PWM. */
-    fan_pwm_init(SKR_FAN_PART_PIN);
+    /* Configure the E driver over UART, then bring up the step/dir pins. */
+    tmc2209_uart_init();
+    tmc2209_configure(TMC_ADDR_E);
+    e_axis_init();
+    e_enable(true);
 
     const float adc_to_volts = 3.3f / (1 << 12);
+    bool forward = true;
 
     while (true) {
-        uint16_t hot_raw = therm_read_raw(SKR_HOTEND_THERM_ADC);
-        uint16_t bed_raw = therm_read_raw(SKR_BED_THERM_ADC);
+        printf("E spin %-7s | hotend ADC=%u (%.3f V) | bed ADC=%u (%.3f V)\n",
+               forward ? "forward" : "reverse",
+               therm_read_raw(SKR_HOTEND_THERM_ADC),
+               therm_read_raw(SKR_HOTEND_THERM_ADC) * adc_to_volts,
+               therm_read_raw(SKR_BED_THERM_ADC),
+               therm_read_raw(SKR_BED_THERM_ADC) * adc_to_volts);
 
-        printf("SKR Pico alive | hotend ADC=%u (%.3f V) | bed ADC=%u (%.3f V)\n",
-               hot_raw, hot_raw * adc_to_volts,
-               bed_raw, bed_raw * adc_to_volts);
-
-        sleep_ms(1000);
+        e_set_dir(forward);
+        e_step(STEPS_PER_REV * 5);   /* ~2 revolutions */
+        forward = !forward;
     }
 }

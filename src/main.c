@@ -36,11 +36,18 @@
 #define STEPS_PER_MM       (STEPS_PER_REV / MM_PER_REV)        /* 80 steps/mm */
 
 /* ---- Soft travel limit (no endstop, so this just rejects bad targets) ---- */
-#define AXIS_TRAVEL_MM     200.0f
+#define AXIS_TRAVEL_MM     350.0f
 
-/* ---- Step pulse timing ---- */
+/* ---- Step pulse timing & acceleration ramp ----
+ * Speed is set by the inter-pulse gap. We ramp the gap from STEP_START_US down
+ * to STEP_MIN_US over the first STEP_RAMP steps (and back up over the last
+ * STEP_RAMP), so the motor accelerates instead of slamming to top speed and
+ * stalling. At 80 steps/mm: STEP_MIN_US=75 -> ~12.8 kHz -> ~160 mm/s cruise.
+ * Lower STEP_MIN_US for more speed; if it stalls, raise it or lengthen STEP_RAMP. */
 #define STEP_HIGH_US       3     /* TMC2209 needs ~100 ns; 3 µs is safe */
-#define STEP_LOW_US        200   /* gap between pulses -> ~5 kHz step rate */
+#define STEP_START_US      350   /* gap for the first/last step (slow ends) */
+#define STEP_MIN_US        50    /* gap at cruise (top speed) */
+#define STEP_RAMP          600   /* steps spent accelerating (and decelerating) */
 
 /* Absolute carriage position, in microsteps, measured right from the left end. */
 static int32_t g_pos_steps = 0;
@@ -87,13 +94,26 @@ static void e_enable(bool on) {
     gpio_put(SKR_E_ENABLE_PIN, on ? 0 : 1); /* active-low */
 }
 
-/* Emit `count` step pulses at the configured rate. */
+/* Inter-pulse gap for step `idx` of a `count`-step move: ramps up to cruise
+ * speed at the start and back down at the end. If the move is shorter than
+ * 2*STEP_RAMP, this naturally yields a triangular profile that never reaches
+ * full speed (so short moves stay safe too). */
+static uint32_t step_gap_us(uint32_t idx, uint32_t count) {
+    uint32_t from_start = idx;
+    uint32_t from_end   = count - 1 - idx;
+    uint32_t edge = (from_start < from_end) ? from_start : from_end;
+    if (edge >= STEP_RAMP) return STEP_MIN_US;          /* cruising */
+    uint32_t span = STEP_START_US - STEP_MIN_US;        /* linear ramp */
+    return STEP_START_US - (span * edge) / STEP_RAMP;
+}
+
+/* Emit `count` step pulses with an acceleration/deceleration ramp. */
 static void e_step(uint32_t count) {
     for (uint32_t i = 0; i < count; i++) {
         gpio_put(SKR_E_STEP_PIN, 1);
         sleep_us(STEP_HIGH_US);
         gpio_put(SKR_E_STEP_PIN, 0);
-        sleep_us(STEP_LOW_US);
+        sleep_us(step_gap_us(i, count));
     }
 }
 

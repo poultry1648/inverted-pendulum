@@ -14,6 +14,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <math.h>
 #include "pico/stdlib.h"
 #include "skr_pico.h"
 #include "tmc2209.h"
@@ -71,6 +72,32 @@ static void handle_line(char *line) {
     } else if (!strcmp(cmd, "reset")) {
         control_post_cmd(CMD_RESET, 0, 0);
         printf("reset\n");
+    } else if (!strcmp(cmd, "zero")) {
+        control_post_cmd(CMD_ZERO, 0, 0);
+        printf("zero: averaging pot for ~1 s, then theta=0...\n");
+    } else if (!strcmp(cmd, "cal")) {
+        if (!arg) { printf("usage: cal <deg>  (pole held at a known angle)\n"); return; }
+        float deg = strtof(arg, NULL);
+        if (fabsf(deg) < 0.01f) { printf("cal: angle must be non-zero\n"); return; }
+        control_post_cmd(CMD_CAL, 0, deg);
+        printf("cal: computing scale from %.2f deg...\n", deg);
+    } else if (!strcmp(cmd, "calmode")) {
+        bool on  = arg && (!strcmp(arg, "on")  || !strcmp(arg, "1"));
+        bool off = arg && (!strcmp(arg, "off") || !strcmp(arg, "0"));
+        if (!on && !off) { printf("usage: calmode on|off\n"); return; }
+        control_post_cmd(CMD_CALMODE, 0, on ? 1.0f : 0.0f);
+        printf("calmode %s (tilt safety %s)\n",
+               on ? "on" : "off", on ? "suspended" : "active");
+    } else if (!strcmp(cmd, "calstatus")) {
+        telemetry_t t;
+        if (control_get_telemetry(&t)) {
+            printf("calstatus: upright_raw=%.1f deg_per_count=%.5f "
+                   "theta=%.2f deg calmode=%s\n",
+                   t.upright_raw, t.deg_per_count, t.theta_deg,
+                   t.calmode ? "on" : "off");
+        } else {
+            printf("calstatus: telemetry busy, retry\n");
+        }
     } else if (!strcmp(cmd, "mode")) {
         int m = mode_from_name(arg);
         if (m < 0) printf("usage: mode idle|hold|vel|square|sine|<n>\n");
@@ -119,18 +146,34 @@ int main(void) {
     printf("  go|stop|reset\n");
     printf("  mode hold|vel|square|sine|idle\n");
     printf("  vel <mm/s>  amp <mm/s>  freq <hz>  kp <gain>\n");
+    printf("Calibration (theta is signed from upright, +RIGHT):\n");
+    printf("  calmode on|off   suspend/restore the tilt safety trip\n");
+    printf("  zero             hold pole vertical; average ~1 s -> theta=0\n");
+    printf("  cal <deg>        hold pole <deg> to the RIGHT; set signed scale\n");
+    printf("  calstatus        print upright_raw, deg_per_count, live theta\n");
 
     control_start();
 
     char line[48];
     size_t n = 0;
-    uint32_t last_status = to_ms_since_boot(get_absolute_time());
-    uint32_t last_dbg    = last_status;
+    uint32_t last_status  = to_ms_since_boot(get_absolute_time());
+    uint32_t last_dbg     = last_status;
+    uint32_t last_cal_seq = 0;
 
     while (true) {
         uint32_t now = to_ms_since_boot(get_absolute_time());
         telemetry_t t;
         bool have = control_get_telemetry(&t);
+
+        /* Calibration applied by core 1: print values to paste into motion.h. */
+        if (have && t.cal_seq != last_cal_seq) {
+            last_cal_seq = t.cal_seq;
+            printf("cal done: upright_raw=%.1f  deg_per_count=%.6f\n",
+                   t.upright_raw, t.deg_per_count);
+            printf("  paste into src/motion.h:\n");
+            printf("  #define THETA_UPRIGHT_RAW   %.1ff\n", t.upright_raw);
+            printf("  #define THETA_DEG_PER_COUNT %.6ff\n", t.deg_per_count);
+        }
 
         /* ~5 Hz status: KEEP the pos=/raw=/deg token contract with web/. */
         if (have && now - last_status >= 200) {

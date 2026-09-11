@@ -7,8 +7,10 @@ repository currently implements the deterministic real-time motion core and a
 serial/Web-Serial interface that the controller will plug into.
 
 > **Status: work in progress.** The cart moves under a fixed-rate 1 kHz control
-> loop with a *placeholder* controller. LQR, upright angle calibration, and
-> homing are not implemented yet — see [Roadmap](#roadmap).
+> loop with a *placeholder* controller. LQR and homing are not implemented yet,
+> but the pendulum angle is now calibrated to a signed deviation from upright —
+> see [Pendulum angle calibration](#pendulum-angle-calibration) and
+> [Roadmap](#roadmap).
 
 ## Features
 
@@ -111,9 +113,11 @@ rule (takes effect immediately):
 SUBSYSTEM=="tty", ATTRS{idVendor}=="2e8a", ATTRS{idProduct}=="000a", MODE="0666"
 ```
 
-The UI shows cart position, pot angle and a full telemetry card, and sends the
-same line protocol as the terminal. The move buttons jog relative to the last
-reported position and clamp to the travel range parsed from the boot banner.
+The UI shows cart position, the signed pole tilt and a full telemetry card, and
+sends the same line protocol as the terminal. The move buttons jog relative to
+the last reported position and clamp to the travel range parsed from the boot
+banner. Drive controls (stop/go/reset, mode, gains) and the full calibration
+workflow are exposed, plus a raw-command box for anything else.
 
 ## Serial console / protocol
 
@@ -135,17 +139,56 @@ Commands (one per line):
 | `vel <mm/s>` | Constant-velocity magnitude |
 | `amp <mm/s>` `freq <hz>` | Square/sine amplitude and frequency |
 | `kp <gain>` | Position-hold proportional gain |
+| `zero` | Average the pot for ~1 s and set that as upright (`theta = 0`) |
+| `cal <deg>` | Pole is held at a known angle; set the signed degrees-per-count scale |
+| `calmode on\|off` | Suspend/restore the tilt safety while calibrating |
+| `calstatus` | Print `upright_raw`, `deg_per_count` and the live `theta` |
 | `home` / `h` | *Not implemented yet* (carriage is assumed parked at 0 mm) |
 
 Telemetry is printed on two lines:
 
 ```text
-pos=  0.00 mm  TH0 raw= 1370  150.0 deg          # ~5 Hz, parsed by web/
+pos=  0.00 mm  TH0 raw= 1370   1.5 deg          # ~5 Hz, parsed by web/
 dbg tick=12345 steps=0 jit=999/1000/1002 us miss=0 fault=0 mode=idle v=0.0 ...  # ~1 Hz
 ```
 
 The `pos=`, `raw=` and `deg` tokens are a **parsing contract** with `web/`; keep
-them if you change the status `printf`.
+them if you change the status `printf`. `deg` is now signed from upright
+(positive = tilt to the right), and `raw` is still the absolute ADC value.
+
+### Pendulum angle calibration
+
+`theta` is a signed angle from upright: `0` when the pole is vertical, positive
+when it tilts toward **+x (RIGHT, increasing cart mm)** and negative to the left.
+The tilt safety trips when `|theta| > MAX_TILT_DEG`, so it is only meaningful
+once the upright reference and signed scale are calibrated.
+
+Workflow (USB console, or the web UI's **Angle calibration** panel):
+
+1. `calmode on` — suspend the tilt safety so the pole can be swept through large
+   angles without latching a fault.
+2. Hold the pole vertical and still, then `zero` — averages the pot for ~1 s and
+   stores that raw value as upright. `theta` should now read ~0.
+3. Hold the pole at a known angle to the **RIGHT** (e.g. 45 or 90 deg), then
+   `cal 45` (the angle used) — computes and stores the signed
+   `deg_per_count = (raw_now - upright_raw) / deg`.
+4. Tilt right and confirm `theta` goes positive. If it goes negative the sign is
+   flipped; recalibrate or negate `THETA_DEG_PER_COUNT`.
+5. `calmode off` — restore the tilt safety. `zero` once more with the pole
+   vertical if desired.
+
+`calstatus` prints the current `upright_raw`, `deg_per_count` and live `theta`.
+After `zero`/`cal`, the firmware prints the values to paste back into
+`src/motion.h` as the compile-time defaults:
+
+```c
+#define THETA_UPRIGHT_RAW   <printed>
+#define THETA_DEG_PER_COUNT <printed>
+```
+
+Calibration lives in RAM only; it is **not** persisted to flash. A flash write
+stalls XIP and would fault the core 1 control loop, so any future persistence
+must run on core 0 before `control_start()` (or with core 1 paused).
 
 ## Architecture
 
@@ -182,9 +225,9 @@ the real-time plumbing.
 
 - [x] **Stage 1 — real-time motion core**: dual-core 1 kHz loop, non-blocking
       step generation, safety latch, telemetry, web UI.
-- [ ] **Angle calibration**: `theta` is currently an absolute pot angle with no
-      upright reference. Make it a signed deviation from vertical and use it for
-      the tilt safety.
+- [x] **Angle calibration**: `theta` is a signed deviation from vertical with a
+      runtime `zero`/`cal` workflow, and the tilt safety uses it. Values are not
+      yet persisted to flash.
 - [ ] **Homing**: open-loop hard-stop homing (creep into the left stop, zero,
       back off) — no limit switch required.
 - [ ] **LQR**: derive the linearized cart-pole model, compute gains offline

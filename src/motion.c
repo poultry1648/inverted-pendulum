@@ -93,16 +93,30 @@ int32_t motion_emit(float v, absolute_time_t tick_start, absolute_time_t tick_en
     return n;
 }
 
+/* Upright reference and signed scale. Runtime-calibratable; defaults come from
+ * motion.h. NOTE: no flash persistence by design — flash writes stall XIP and
+ * would fault the core 1 loop. Save calibration from core 0 before
+ * control_start() (or with core 1 paused) if persistence is added later. */
+static float g_upright_raw   = THETA_UPRIGHT_RAW;
+static float g_deg_per_count = THETA_DEG_PER_COUNT;
+
+void  motion_pot_set_upright(float raw)         { g_upright_raw = raw; }
+void  motion_pot_set_scale(float deg_per_count) { g_deg_per_count = deg_per_count; }
+float motion_pot_upright_raw(void)              { return g_upright_raw; }
+float motion_pot_deg_per_count(void)            { return g_deg_per_count; }
+
 void motion_pot_init(void) {
     adc_init();
     adc_gpio_init(SKR_BED_THERM_PIN);   /* TH0 = GPIO26 = ADC0 */
     adc_select_input(SKR_BED_THERM_ADC);
 }
 
+/* theta = (raw - upright) * deg_per_count: 0 when vertical, +RIGHT / -LEFT.
+ * raw_out keeps the raw ADC value for telemetry. */
 float motion_pot_read(float *raw_out) {
     uint32_t sum = 0;
     for (int i = 0; i < POT_SAMPLES; i++) sum += adc_read();
     float raw = (float)(sum / POT_SAMPLES);
     if (raw_out) *raw_out = raw;
-    return (raw - POT_RAW_MIN) / (POT_RAW_MAX - POT_RAW_MIN) * POT_ANGLE_DEG;
+    return (raw - g_upright_raw) * g_deg_per_count;
 }

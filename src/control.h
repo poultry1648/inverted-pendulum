@@ -32,6 +32,9 @@ typedef enum {
     CMD_VEL,        /* value = constant velocity mm/s */
     CMD_KP,         /* value = position-hold gain */
     CMD_RESET,      /* clear fault + reset stats */
+    CMD_ZERO,       /* average pot ~1 s and set that raw as upright (theta=0) */
+    CMD_CAL,        /* value = pole's known angle from upright; set signed scale */
+    CMD_CALMODE,    /* value != 0 -> bypass the tilt trip while calibrating */
 } control_cmd_type_t;
 
 typedef struct {
@@ -49,6 +52,11 @@ typedef struct {
     uint32_t missed;
     uint32_t fault;
     uint8_t  mode;
+    /* Calibration snapshot (cal_seq bumps when upright/scale change). */
+    float    upright_raw;
+    float    deg_per_count;
+    uint8_t  calmode;
+    uint32_t cal_seq;
 } telemetry_t;
 
 void control_start(void);                       /* launch core 1 (call on core 0) */

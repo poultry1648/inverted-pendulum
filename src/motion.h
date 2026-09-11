@@ -56,6 +56,31 @@
 #define POT_RAW_MIN 20.0f
 #define POT_RAW_MAX 2753.0f
 
+/* ---- Pendulum angle calibration -----------------------------------------
+ * The pot reports an absolute 0..POT_ANGLE_DEG angle, but the controller needs
+ * theta measured from upright and signed:
+ *
+ *     theta = (raw - THETA_UPRIGHT_RAW) * THETA_DEG_PER_COUNT
+ *
+ *   theta = 0   when the pole is vertical,
+ *   theta > 0   when the pole tilts toward +x (RIGHT, increasing cart mm),
+ *   theta < 0   when the pole tilts LEFT.
+ *
+ * THETA_UPRIGHT_RAW: raw 12-bit ADC value (0..4095) with the pole held vertical.
+ *   Measure it with the `zero` command (averages the pot for ~1 s) and paste the
+ *   printed value here. The default below is the pot's mid-travel, a reasonable
+ *   starting point until calibrated.
+ *
+ * THETA_DEG_PER_COUNT: signed mechanical degrees per ADC count. The default is
+ *   derived from the pot's electrical span (POT_ANGLE_DEG over the raw range) as
+ *   a starting point; refine it with the `cal <deg>` command (hold the pole at a
+ *   known angle, then paste the printed value here). The SIGN encodes the
+ *   mounting direction: make it positive if a RIGHT tilt increases raw, negative
+ *   if a RIGHT tilt decreases raw. Both values are overridable at runtime via
+ *   motion_pot_set_upright()/motion_pot_set_scale(). */
+#define THETA_UPRIGHT_RAW   ((POT_RAW_MIN + POT_RAW_MAX) * 0.5f)
+#define THETA_DEG_PER_COUNT (POT_ANGLE_DEG / (POT_RAW_MAX - POT_RAW_MIN))
+
 void motion_init(void);                 /* E pins up, de-energized, x = 0 */
 void motion_enable(bool on);            /* ENABLE is active-low */
 void motion_fault_latch(void);          /* latch, zero output, de-energize */
@@ -72,6 +97,18 @@ int32_t motion_emit(float v_cmd_mm_s, absolute_time_t tick_start,
                     absolute_time_t tick_end);
 
 void  motion_pot_init(void);            /* core 1 owns the ADC */
+
+/* Returns theta in signed degrees from upright; raw is still reported via
+ * raw_out for telemetry. Runtime calibration entry points below. */
 float motion_pot_read(float *raw_out);
+
+/* Runtime calibration (called from core 1; values also readable on core 0).
+ * Persistence is deliberately NOT implemented here: a flash write stalls XIP
+ * and would fault the core 1 control loop, so any future save belongs on core 0
+ * before control_start() or with core 1 paused. */
+void  motion_pot_set_upright(float raw);        /* capture theta = 0 */
+void  motion_pot_set_scale(float deg_per_count);/* signed deg per ADC count */
+float motion_pot_upright_raw(void);
+float motion_pot_deg_per_count(void);
 
 #endif /* MOTION_H */

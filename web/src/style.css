@@ -202,6 +202,58 @@ button:disabled {
   color: var(--accent);
 }
 
+.param-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 10px 14px;
+  margin-top: 14px;
+}
+
+.param {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.param--wide {
+  grid-column: span 2;
+}
+
+.param-label {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.param input,
+.param select {
+  font: inherit;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+}
+
+.param input:focus,
+.param select:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.param input:disabled,
+.param select:disabled {
+  opacity: 0.45;
+}
+
+.param button {
+  width: 100%;
+}
+
+#calmode.active {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
 .log h2 {
   font-size: 13px;
   text-transform: uppercase;

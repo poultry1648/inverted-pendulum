@@ -73,6 +73,18 @@ static uint32_t g_missed       = 0;   /* cumulative, for telemetry */
 static uint32_t g_miss_streak  = 0;   /* consecutive, for the fault */
 static bool     g_faulted      = false;
 
+/* Calibration: `zero` averages raw for ~1 s on core 1, `cal` derives the signed
+ * scale from a raw sample, and calmode suspends the tilt trip during the sweep.
+ * cal_seq lets core 0 print the result once core 1 has applied it. */
+#define ZERO_AVG_TICKS  CONTROL_HZ          /* ~1 s of samples */
+static bool     g_calmode     = false;
+static bool     g_zeroing     = false;
+static float    g_zero_sum    = 0.0f;
+static uint32_t g_zero_count  = 0;
+static bool     g_cal_pending = false;
+static float    g_cal_angle   = 0.0f;
+static uint32_t g_cal_seq     = 0;
+
 static void apply_cmd(uint8_t type, uint8_t mode, float value) {
     switch (type) {
     case CMD_STOP:   g_mode = CTRL_MODE_IDLE; break;
@@ -89,6 +101,24 @@ static void apply_cmd(uint8_t type, uint8_t mode, float value) {
         g_period_min = 0xFFFFFFFFu;
         g_period_max = g_period_sum = g_period_count = 0;
         motion_fault_clear();
+        break;
+    case CMD_ZERO:
+        g_zeroing = true;           /* accumulate raw over ZERO_AVG_TICKS */
+        g_zero_sum = 0.0f;
+        g_zero_count = 0;
+        break;
+    case CMD_CAL:
+        g_cal_pending = true;       /* applied after the next raw sample */
+        g_cal_angle = value;
+        break;
+    case CMD_CALMODE:
+        g_calmode = (value != 0.0f);
+        /* Entering calmode escapes a tilt fault so a bad default doesn't block
+         * the sweep; deadline-miss faults still latch normally. */
+        if (g_calmode && g_faulted) {
+            g_faulted = false;
+            motion_fault_clear();
+        }
         break;
     }
 }
@@ -151,9 +181,30 @@ static void control_core1_entry(void) {
         g_x_prev     = x_mm;
         g_theta_prev = theta;
 
-        /* Safety: latch, zero output, de-energize. */
-        if (!g_faulted && (fabsf(theta) > MAX_TILT_DEG ||
-                           g_miss_streak > DEADLINE_MISS_FAULT)) {
+        /* Calibration: apply pending scale from the raw sample just taken. */
+        if (g_cal_pending) {
+            g_cal_pending = false;
+            if (fabsf(g_cal_angle) > 0.01f) {
+                motion_pot_set_scale(
+                    (raw - motion_pot_upright_raw()) / g_cal_angle);
+                g_cal_seq++;
+            }
+        }
+        /* `zero`: finish the ~1 s average and capture it as upright. */
+        if (g_zeroing) {
+            g_zero_sum += raw;
+            if (++g_zero_count >= ZERO_AVG_TICKS) {
+                motion_pot_set_upright(g_zero_sum / (float)g_zero_count);
+                g_zeroing = false;
+                g_cal_seq++;
+            }
+        }
+
+        /* Safety: latch, zero output, de-energize. calmode bypasses only the
+         * tilt trip; missed deadlines still fault. */
+        if (!g_faulted &&
+            ((!g_calmode && fabsf(theta) > MAX_TILT_DEG) ||
+             g_miss_streak > DEADLINE_MISS_FAULT)) {
             g_faulted = true;
             motion_fault_latch();
         }
@@ -178,6 +229,10 @@ static void control_core1_entry(void) {
             .missed = g_missed,
             .fault = g_faulted,
             .mode = (uint8_t)g_mode,
+            .upright_raw = motion_pot_upright_raw(),
+            .deg_per_count = motion_pot_deg_per_count(),
+            .calmode = g_calmode ? 1 : 0,
+            .cal_seq = g_cal_seq,
         };
         telemetry_publish(&t);
         g_tick++;

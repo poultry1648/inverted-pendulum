@@ -12,6 +12,24 @@ const goZeroBtn = document.getElementById('go-zero');
 const homeBtn = document.getElementById('home');
 const moveButtons = Array.from(document.querySelectorAll('button[data-delta]'));
 
+const stopBtn = document.getElementById('stop');
+const goBtn = document.getElementById('go');
+const resetBtn = document.getElementById('reset');
+const modeSelect = document.getElementById('mode-select');
+const velInput = document.getElementById('vel-input');
+const ampInput = document.getElementById('amp-input');
+const freqInput = document.getElementById('freq-input');
+const kpInput = document.getElementById('kp-input');
+const applyParamsBtn = document.getElementById('apply-params');
+
+const calmodeBtn = document.getElementById('calmode');
+const zeroBtn = document.getElementById('zero');
+const calAngleInput = document.getElementById('cal-angle');
+const calBtn = document.getElementById('cal');
+const calstatusBtn = document.getElementById('calstatus');
+const cmdInput = document.getElementById('cmd-input');
+const cmdSendBtn = document.getElementById('cmd-send');
+
 /* Every field of the firmware's telemetry_t. x_mm/theta_deg/raw arrive on the
  * 5 Hz status line; the rest (plus x_steps) on the 1 Hz dbg line. */
 const TEL_FIELDS = {
@@ -71,6 +89,7 @@ let readableClosed = null;
 let disconnecting = false;
 let currentPos = null;
 let maxTravel = DEFAULT_MAX_TRAVEL;
+let calmodeOn = false;
 
 function setStatus(text, state) {
   statusEl.textContent = text;
@@ -94,6 +113,14 @@ function updateControls() {
   homeBtn.disabled = !connected;
   const canJog = connected && currentPos !== null;
   for (const btn of moveButtons) btn.disabled = !canJog;
+
+  for (const el of [
+    stopBtn, goBtn, resetBtn, modeSelect, velInput, ampInput, freqInput,
+    kpInput, applyParamsBtn, calmodeBtn, zeroBtn, calAngleInput, calBtn,
+    calstatusBtn, cmdInput, cmdSendBtn,
+  ]) {
+    el.disabled = !connected;
+  }
 }
 
 function setCart(mm) {
@@ -132,6 +159,13 @@ function handleLine(rawLine) {
     potEl.textContent = Number(potMatch[2]).toFixed(1);
     setTel('raw', Number(potMatch[1]));
     setTel('theta_deg', Number(potMatch[2]));
+  }
+
+  const calMatch = line.match(/calstatus:.*calmode=(\w+)/);
+  if (calMatch) {
+    calmodeOn = calMatch[1] === 'on';
+    calmodeBtn.textContent = `Calmode: ${calmodeOn ? 'on' : 'off'}`;
+    calmodeBtn.classList.toggle('active', calmodeOn);
   }
 
   const dbgMatch = line.match(
@@ -173,6 +207,26 @@ async function sendHome() {
   } catch (err) {
     log(`Write error: ${err.message}`);
   }
+}
+
+/* Send any raw firmware command, exactly as typed into the terminal. */
+async function sendCommand(text) {
+  if (!writer) return;
+  const cmd = text.trim();
+  if (!cmd) return;
+  try {
+    await writer.write(encoder.encode(`${cmd}\n`));
+    log(`>> ${cmd}`);
+  } catch (err) {
+    log(`Write error: ${err.message}`);
+  }
+}
+
+async function toggleCalmode() {
+  calmodeOn = !calmodeOn;
+  calmodeBtn.textContent = `Calmode: ${calmodeOn ? 'on' : 'off'}`;
+  calmodeBtn.classList.toggle('active', calmodeOn);
+  await sendCommand(`calmode ${calmodeOn ? 'on' : 'off'}`);
 }
 
 async function connect() {
@@ -281,3 +335,30 @@ goZeroBtn.addEventListener('click', () => sendCoord(0));
 homeBtn.addEventListener('click', sendHome);
 connectBtn.addEventListener('click', connect);
 disconnectBtn.addEventListener('click', disconnect);
+
+stopBtn.addEventListener('click', () => sendCommand('stop'));
+goBtn.addEventListener('click', () => sendCommand('go'));
+resetBtn.addEventListener('click', () => sendCommand('reset'));
+applyParamsBtn.addEventListener('click', async () => {
+  await sendCommand(`mode ${modeSelect.value}`);
+  await sendCommand(`vel ${Number(velInput.value)}`);
+  await sendCommand(`amp ${Number(ampInput.value)}`);
+  await sendCommand(`freq ${Number(freqInput.value)}`);
+  await sendCommand(`kp ${Number(kpInput.value)}`);
+});
+
+calmodeBtn.addEventListener('click', toggleCalmode);
+zeroBtn.addEventListener('click', () => sendCommand('zero'));
+calBtn.addEventListener('click', () => sendCommand(`cal ${Number(calAngleInput.value)}`));
+calstatusBtn.addEventListener('click', () => sendCommand('calstatus'));
+
+cmdSendBtn.addEventListener('click', () => {
+  sendCommand(cmdInput.value);
+  cmdInput.value = '';
+});
+cmdInput.addEventListener('keydown', (event) => {
+  if (event.key === 'Enter') {
+    sendCommand(cmdInput.value);
+    cmdInput.value = '';
+  }
+});

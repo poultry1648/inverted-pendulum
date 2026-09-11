@@ -21,12 +21,16 @@ pico_sdk_init()
 add_executable(skr_pico_fw
     src/main.c
     src/tmc2209.c
+    src/motion.c  # step generation, position, limits, safety
+    src/control.c # core 1 real-time loop + inter-core plumbing
 )
 
 target_link_libraries(skr_pico_fw
-    pico_stdlib   # gpio, time, stdio, etc.
-    hardware_uart # TMC2209 driver config
-    hardware_adc  # TH0 potentiometer readout
+    pico_stdlib    # gpio, time, stdio, etc.
+    pico_multicore # launch + synchronise the core 1 control loop
+    pico_util      # core-safe command queue
+    hardware_uart  # TMC2209 driver config
+    hardware_adc   # TH0 potentiometer readout
 )
 
 # Console over the USB-CDC port (the board's USB-C). Set the second arg to 1

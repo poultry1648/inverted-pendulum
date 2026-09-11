@@ -141,9 +141,10 @@ int main(void) {
         /* ~1 Hz diagnostics on a separate line so web/ parsing is untouched. */
         if (have && now - last_dbg >= 1000) {
             last_dbg = now;
-            printf("dbg tick=%lu jit=%lu/%lu/%lu us miss=%lu fault=%lu "
+            printf("dbg tick=%lu steps=%ld jit=%lu/%lu/%lu us miss=%lu fault=%lu "
                    "mode=%s v=%.1f xd=%.1f thd=%.1f\n",
-                   (unsigned long)t.tick, (unsigned long)t.period_min_us,
+                   (unsigned long)t.tick, (long)t.x_steps,
+                   (unsigned long)t.period_min_us,
                    (unsigned long)t.period_mean_us, (unsigned long)t.period_max_us,
                    (unsigned long)t.missed, (unsigned long)t.fault,
                    mode_name(t.mode), t.v_cmd, t.xdot, t.thetadot);

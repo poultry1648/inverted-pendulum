@@ -12,6 +12,54 @@ const goZeroBtn = document.getElementById('go-zero');
 const homeBtn = document.getElementById('home');
 const moveButtons = Array.from(document.querySelectorAll('button[data-delta]'));
 
+/* Every field of the firmware's telemetry_t. x_mm/theta_deg/raw arrive on the
+ * 5 Hz status line; the rest (plus x_steps) on the 1 Hz dbg line. */
+const TEL_FIELDS = {
+  mode:           { label: 'mode',             digits: null },
+  fault:          { label: 'fault',            digits: null },
+  x_steps:        { label: 'x_steps',          digits: 0 },
+  x_mm:           { label: 'x (mm)',           digits: 2 },
+  theta_deg:      { label: 'theta (deg)',      digits: 1 },
+  raw:            { label: 'raw',              digits: 0 },
+  xdot:           { label: 'xdot (mm/s)',      digits: 1 },
+  thetadot:       { label: 'thetadot (deg/s)', digits: 1 },
+  v_cmd:          { label: 'v_cmd (mm/s)',     digits: 1 },
+  tick:           { label: 'tick',             digits: 0 },
+  period_min_us:  { label: 'period min (us)',  digits: 0 },
+  period_mean_us: { label: 'period mean (us)', digits: 0 },
+  period_max_us:  { label: 'period max (us)',  digits: 0 },
+  missed:         { label: 'missed',           digits: 0 },
+};
+
+const telemetryEl = document.getElementById('telemetry');
+const telEls = {};
+for (const [key, { label }] of Object.entries(TEL_FIELDS)) {
+  const row = document.createElement('div');
+  row.className = 'field';
+  row.innerHTML = `<span class="field-label">${label}</span><span class="field-value">--</span>`;
+  telemetryEl.append(row);
+  telEls[key] = row.lastElementChild;
+}
+
+function setTel(key, value) {
+  const el = telEls[key];
+  if (!el) return;
+  const { digits } = TEL_FIELDS[key];
+  el.textContent =
+    typeof value === 'number' && digits !== null ? value.toFixed(digits) : String(value);
+  el.classList.toggle(
+    'bad',
+    (key === 'fault' && value === 'FAULT') || (key === 'missed' && Number(value) > 0)
+  );
+}
+
+function resetTelemetry() {
+  for (const el of Object.values(telEls)) {
+    el.textContent = '--';
+    el.classList.remove('bad');
+  }
+}
+
 const MAX_LOG_LINES = 200;
 const DEFAULT_MAX_TRAVEL = 350;
 const encoder = new TextEncoder();
@@ -67,7 +115,10 @@ function handleLine(rawLine) {
   }
 
   const posMatch = line.match(/pos=\s*(-?\d+(?:\.\d+)?)\s*mm/);
-  if (posMatch) setCart(Number(posMatch[1]));
+  if (posMatch) {
+    setCart(Number(posMatch[1]));
+    setTel('x_mm', Number(posMatch[1]));
+  }
 
   const movedMatch = line.match(/(?:moved (?:left|right) to|already at)\s+(-?\d+(?:\.\d+)?)\s*mm/);
   if (movedMatch) setCart(Number(movedMatch[1]));
@@ -79,6 +130,26 @@ function handleLine(rawLine) {
   if (potMatch) {
     potRawEl.textContent = potMatch[1];
     potEl.textContent = Number(potMatch[2]).toFixed(1);
+    setTel('raw', Number(potMatch[1]));
+    setTel('theta_deg', Number(potMatch[2]));
+  }
+
+  const dbgMatch = line.match(
+    /dbg tick=(\d+) steps=(-?\d+) jit=(\d+)\/(\d+)\/(\d+) us miss=(\d+) fault=(\d+) mode=(\S+) v=(-?\d+(?:\.\d+)?) xd=(-?\d+(?:\.\d+)?) thd=(-?\d+(?:\.\d+)?)/
+  );
+  if (dbgMatch) {
+    const [, tick, steps, jmin, jmean, jmax, miss, fault, mode, v, xd, thd] = dbgMatch;
+    setTel('tick', Number(tick));
+    setTel('x_steps', Number(steps));
+    setTel('period_min_us', Number(jmin));
+    setTel('period_mean_us', Number(jmean));
+    setTel('period_max_us', Number(jmax));
+    setTel('missed', Number(miss));
+    setTel('fault', fault === '1' ? 'FAULT' : 'ok');
+    setTel('mode', mode);
+    setTel('v_cmd', Number(v));
+    setTel('xdot', Number(xd));
+    setTel('thetadot', Number(thd));
   }
 }
 
@@ -134,6 +205,7 @@ async function connect() {
 
   disconnecting = false;
   currentPos = null;
+  resetTelemetry();
   setStatus('connected', 'on');
   log('--- connected (115200) ---');
   updateControls();

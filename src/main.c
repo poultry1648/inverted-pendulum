@@ -20,6 +20,7 @@
 #include <stdlib.h>
 #include <math.h>
 #include "pico/stdlib.h"
+#include "hardware/adc.h"
 #include "skr_pico.h"
 #include "tmc2209.h"
 
@@ -48,6 +49,18 @@
 #define STEP_START_US      350   /* gap for the first/last step (slow ends) */
 #define STEP_MIN_US        50    /* gap at cruise (top speed) */
 #define STEP_RAMP          600   /* steps spent accelerating (and decelerating) */
+
+/* Potentiometer on TH0 (GPIO26 = ADC0). Full-scale electrical rotation of the
+ * pot, in degrees; adjust to match the actual part (most single-turn pots ~300). */
+#define POT_ANGLE_DEG 300.0f
+#define POT_SAMPLES    8
+
+/* Calibration: the raw 12-bit ADC values observed at the pot's minimum and
+ * maximum positions. Read the "raw=" number printed in the terminal at each
+ * end of travel and put those values here; the angle then maps cleanly across
+ * 0..POT_ANGLE_DEG. */
+#define POT_RAW_MIN 0.0f
+#define POT_RAW_MAX 4095.0f
 
 /* Absolute carriage position, in microsteps, measured right from the left end. */
 static int32_t g_pos_steps = 0;
@@ -137,19 +150,16 @@ static void move_to_mm(float target_mm) {
            forward ? "left" : "right", g_pos_steps / STEPS_PER_MM);
 }
 
-/* Read one newline-terminated line from USB serial into buf (blocking). */
-static void read_line(char *buf, size_t maxlen) {
-    size_t n = 0;
-    while (true) {
-        int c = getchar_timeout_us(1000000);   /* 1 s slices; keep waiting */
-        if (c == PICO_ERROR_TIMEOUT) continue;
-        if (c == '\r' || c == '\n') {
-            if (n == 0) continue;               /* swallow blank lines / CRLF */
-            buf[n] = '\0';
-            return;
-        }
-        if (n < maxlen - 1) buf[n++] = (char)c;
+/* Sample the pot on TH0. Returns angle in degrees; also reports the raw
+ * 12-bit ADC reading via `raw_out` for diagnostics. */
+static float pot_read(float *raw_out) {
+    uint32_t sum = 0;
+    for (int i = 0; i < POT_SAMPLES; i++) {
+        sum += adc_read();
     }
+    float raw = (float)(sum / POT_SAMPLES);
+    if (raw_out) *raw_out = raw;
+    return (raw - POT_RAW_MIN) / (POT_RAW_MAX - POT_RAW_MIN) * POT_ANGLE_DEG;
 }
 
 int main(void) {
@@ -168,27 +178,50 @@ int main(void) {
     /* Carriage assumed parked at the left end == 0 mm. */
     g_pos_steps = 0;
 
-    printf("\nSKR Pico belt axis ready. Range 0..%.0f mm (0 = left).\n",
+    /* TH0 = GPIO26 = ADC0. */
+    adc_init();
+    adc_gpio_init(SKR_BED_THERM_PIN);
+    adc_select_input(SKR_BED_THERM_ADC);
+
+    printf("\nSKR Pico ready. Range 0..%.0f mm (0 = left).\n",
            AXIS_TRAVEL_MM);
-    printf("Send a target coordinate in mm and press enter.\n");
+    printf("Potentiometer on TH0: angle printed as you turn it.\n");
+    printf("Send a coordinate in mm and press enter to move the axis.\n");
 
     char line[32];
+    size_t n = 0;
+    uint32_t last = to_ms_since_boot(get_absolute_time());
+
     while (true) {
-        printf("pos %.2f mm > ", g_pos_steps / STEPS_PER_MM);
-        read_line(line, sizeof(line));
-
-        char *end;
-        float target_mm = strtof(line, &end);
-        if (end == line) {
-            printf("not a number: \"%s\"\n", line);
-            continue;
-        }
-        if (target_mm < 0.0f || target_mm > AXIS_TRAVEL_MM) {
-            printf("out of range: %.2f mm (allowed 0..%.0f)\n",
-                   target_mm, AXIS_TRAVEL_MM);
-            continue;
+        uint32_t now = to_ms_since_boot(get_absolute_time());
+        if (now - last >= 200) {
+            last = now;
+            float raw;
+            float angle = pot_read(&raw);
+            printf("TH0 raw=%4.0f  %5.1f deg\n", raw, angle);
         }
 
-        move_to_mm(target_mm);
+        int c = getchar_timeout_us(0);
+        if (c == PICO_ERROR_TIMEOUT) continue;
+        if (c == '\r' || c == '\n') {
+            if (n == 0) continue;               /* swallow blank lines / CRLF */
+            line[n] = '\0';
+            n = 0;
+
+            char *end;
+            float target_mm = strtof(line, &end);
+            if (end == line) {
+                printf("not a number: \"%s\"\n", line);
+                continue;
+            }
+            if (target_mm < 0.0f || target_mm > AXIS_TRAVEL_MM) {
+                printf("out of range: %.2f mm (allowed 0..%.0f)\n",
+                       target_mm, AXIS_TRAVEL_MM);
+                continue;
+            }
+            move_to_mm(target_mm);
+        } else if (n < sizeof(line) - 1) {
+            line[n++] = (char)c;
+        }
     }
 }

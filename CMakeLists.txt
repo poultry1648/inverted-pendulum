@@ -26,6 +26,7 @@ add_executable(skr_pico_fw
 target_link_libraries(skr_pico_fw
     pico_stdlib   # gpio, time, stdio, etc.
     hardware_uart # TMC2209 driver config
+    hardware_adc  # TH0 potentiometer readout
 )
 
 # Console over the USB-CDC port (the board's USB-C). Set the second arg to 1

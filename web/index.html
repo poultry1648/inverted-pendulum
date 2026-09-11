@@ -35,6 +35,18 @@
         </article>
       </section>
 
+      <section class="controls">
+        <h2>Move cart</h2>
+        <div class="buttons">
+          <button type="button" data-delta="-10" disabled>&minus;10 mm</button>
+          <button type="button" data-delta="-1" disabled>&minus;1 mm</button>
+          <button type="button" data-delta="1" disabled>+1 mm</button>
+          <button type="button" data-delta="10" disabled>+10 mm</button>
+          <button id="home" type="button" disabled>Go to 0</button>
+        </div>
+        <div class="sub">Target range 0..<span id="max-travel">350</span> mm</div>
+      </section>
+
       <section class="log">
         <h2>Serial log</h2>
         <pre id="log"></pre>

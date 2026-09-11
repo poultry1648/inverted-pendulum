@@ -22,6 +22,29 @@ the only verification.
   moves the E-axis belt carriage there. Position is dead-reckoned from
   `carriage parked at left == 0 mm`; there is no homing/endstop.
 - `src/tmc2209.c/h` — minimal write-only TMC2209 config over single-wire UART.
+- `web/` — Vite app (Web Serial) that shows cart position and pot angle and
+  sends move commands; it speaks the same line protocol as the terminal.
+
+## Web UI
+
+```bash
+cd web
+npm install
+npm run dev        # http://localhost:5173
+```
+
+Chrome/Edge only (Web Serial). On Linux the user needs read/write access to
+`/dev/ttyACM0`; either join the `dialout` group (requires re-login) or install a
+udev rule (takes effect immediately):
+
+```
+SUBSYSTEM=="tty", ATTRS{idVendor}=="2e8a", ATTRS{idProduct}=="000a", MODE="0666"
+```
+
+The UI parses the periodic `pos=<mm> mm  TH0 raw=<n>  <deg> deg` line and sends
+targets as `<mm>\n`, exactly like typing into the terminal. The move buttons jog
+by ±1/±10 mm relative to the last reported position and clamp to the travel
+range parsed from the boot banner.
 
 ## Gotchas
 
@@ -34,6 +57,8 @@ the only verification.
 - All four TMC2209s share one half-duplex UART line (UART1, TX=GP8/RX=GP9).
   `tmc2209.c` only writes registers; TX echoes onto RX and is ignored.
 - stdio is USB-CDC only (`pico_enable_stdio_uart ... 0` in `CMakeLists.txt`).
+- The periodic status line's `pos=`/`raw=`/`deg` tokens are a parsing contract
+  with `web/`; keep them if you change the printf in `main.c`.
 - Motors are powered from the board's VM input (stepper PSU), not USB — a USB
   connection alone configures the driver but won't turn the motor.
 - `build/`, `.uf2`, `.elf`, `.bin`, `.hex`, `.dis`, `.map` are gitignored; the

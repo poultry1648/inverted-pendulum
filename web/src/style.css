@@ -133,6 +133,42 @@ button:disabled {
   font-variant-numeric: tabular-nums;
 }
 
+.controls {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 20px;
+  margin-bottom: 24px;
+}
+
+.controls h2 {
+  margin: 0 0 12px;
+  font-size: 13px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: var(--muted);
+}
+
+.buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.buttons button {
+  min-width: 76px;
+  padding: 12px 16px;
+  font-size: 15px;
+  font-variant-numeric: tabular-nums;
+}
+
+#home {
+  margin-left: auto;
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
 .log h2 {
   font-size: 13px;
   text-transform: uppercase;

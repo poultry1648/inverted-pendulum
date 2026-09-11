@@ -78,8 +78,8 @@
  *   mounting direction: make it positive if a RIGHT tilt increases raw, negative
  *   if a RIGHT tilt decreases raw. Both values are overridable at runtime via
  *   motion_pot_set_upright()/motion_pot_set_scale(). */
-#define THETA_UPRIGHT_RAW   ((POT_RAW_MIN + POT_RAW_MAX) * 0.5f)
-#define THETA_DEG_PER_COUNT (POT_ANGLE_DEG / (POT_RAW_MAX - POT_RAW_MIN))
+#define THETA_UPRIGHT_RAW   2398 
+#define THETA_DEG_PER_COUNT 0.252809 
 
 void motion_init(void);                 /* E pins up, de-energized, x = 0 */
 void motion_enable(bool on);            /* ENABLE is active-low */

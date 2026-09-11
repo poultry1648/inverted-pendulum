@@ -171,7 +171,7 @@ Workflow (USB console, or the web UI's **Angle calibration** panel):
    stores that raw value as upright. `theta` should now read ~0.
 3. Hold the pole at a known angle to the **RIGHT** (e.g. 45 or 90 deg), then
    `cal 45` (the angle used) — computes and stores the signed
-   `deg_per_count = (raw_now - upright_raw) / deg`.
+   `deg_per_count = deg / (raw_now - upright_raw)`.
 4. Tilt right and confirm `theta` goes positive. If it goes negative the sign is
    flipped; recalibrate or negate `THETA_DEG_PER_COUNT`.
 5. `calmode off` — restore the tilt safety. `zero` once more with the pole

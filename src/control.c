@@ -181,12 +181,13 @@ static void control_core1_entry(void) {
         g_x_prev     = x_mm;
         g_theta_prev = theta;
 
-        /* Calibration: apply pending scale from the raw sample just taken. */
+        /* Calibration: scale is degrees-per-count, so at the known angle A:
+         *   A = (raw - upright) * scale  ->  scale = A / (raw - upright). */
         if (g_cal_pending) {
             g_cal_pending = false;
-            if (fabsf(g_cal_angle) > 0.01f) {
-                motion_pot_set_scale(
-                    (raw - motion_pot_upright_raw()) / g_cal_angle);
+            float delta = raw - motion_pot_upright_raw();
+            if (fabsf(g_cal_angle) > 0.01f && fabsf(delta) > 0.01f) {
+                motion_pot_set_scale(g_cal_angle / delta);
                 g_cal_seq++;
             }
         }

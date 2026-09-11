@@ -21,6 +21,8 @@ const ampInput = document.getElementById('amp-input');
 const freqInput = document.getElementById('freq-input');
 const kpInput = document.getElementById('kp-input');
 const applyParamsBtn = document.getElementById('apply-params');
+const balanceBtn = document.getElementById('balance');
+const balanceStateEl = document.getElementById('balance-state');
 
 const calmodeBtn = document.getElementById('calmode');
 const zeroBtn = document.getElementById('zero');
@@ -47,6 +49,9 @@ const TEL_FIELDS = {
   period_mean_us: { label: 'period mean (us)', digits: 0 },
   period_max_us:  { label: 'period max (us)',  digits: 0 },
   missed:         { label: 'missed',           digits: 0 },
+  lqr_state:      { label: 'lqr_state',        digits: null },
+  x_ref_mm:       { label: 'x_ref (mm)',       digits: 2 },
+  lqr_xi:         { label: 'lqr_xi',           digits: 3 },
 };
 
 const telemetryEl = document.getElementById('telemetry');
@@ -76,6 +81,20 @@ function resetTelemetry() {
     el.textContent = '--';
     el.classList.remove('bad');
   }
+}
+
+const LQR_STATE_TEXT = ['off', 'waiting for pole...', 'balancing'];
+let lqrState = 0;
+
+function setLqrState(value) {
+  const n = Number(value);
+  lqrState = Number.isFinite(n) ? n : 0;
+  const text = LQR_STATE_TEXT[lqrState] ?? '?';
+  balanceStateEl.textContent = text;
+  setTel('lqr_state', text);
+  const on = lqrState !== 0;
+  balanceBtn.classList.toggle('active', on);
+  balanceBtn.textContent = on ? 'Stop balance' : 'Balance';
 }
 
 const MAX_LOG_LINES = 200;
@@ -116,8 +135,8 @@ function updateControls() {
 
   for (const el of [
     stopBtn, goBtn, resetBtn, modeSelect, velInput, ampInput, freqInput,
-    kpInput, applyParamsBtn, calmodeBtn, zeroBtn, calAngleInput, calBtn,
-    calstatusBtn, cmdInput, cmdSendBtn,
+    kpInput, applyParamsBtn, balanceBtn, calmodeBtn, zeroBtn, calAngleInput,
+    calBtn, calstatusBtn, cmdInput, cmdSendBtn,
   ]) {
     el.disabled = !connected;
   }
@@ -169,10 +188,10 @@ function handleLine(rawLine) {
   }
 
   const dbgMatch = line.match(
-    /dbg tick=(\d+) steps=(-?\d+) jit=(\d+)\/(\d+)\/(\d+) us miss=(\d+) fault=(\d+) mode=(\S+) v=(-?\d+(?:\.\d+)?) xd=(-?\d+(?:\.\d+)?) thd=(-?\d+(?:\.\d+)?)/
+    /dbg tick=(\d+) steps=(-?\d+) jit=(\d+)\/(\d+)\/(\d+) us miss=(\d+) fault=(\d+) mode=(\S+) lqr=(\d+) xref=(-?\d+(?:\.\d+)?) xi=(-?\d+(?:\.\d+)?) v=(-?\d+(?:\.\d+)?) xd=(-?\d+(?:\.\d+)?) thd=(-?\d+(?:\.\d+)?)/
   );
   if (dbgMatch) {
-    const [, tick, steps, jmin, jmean, jmax, miss, fault, mode, v, xd, thd] = dbgMatch;
+    const [, tick, steps, jmin, jmean, jmax, miss, fault, mode, lqr, xref, xi, v, xd, thd] = dbgMatch;
     setTel('tick', Number(tick));
     setTel('x_steps', Number(steps));
     setTel('period_min_us', Number(jmin));
@@ -181,6 +200,9 @@ function handleLine(rawLine) {
     setTel('missed', Number(miss));
     setTel('fault', fault === '1' ? 'FAULT' : 'ok');
     setTel('mode', mode);
+    setLqrState(lqr);
+    setTel('x_ref_mm', Number(xref));
+    setTel('lqr_xi', Number(xi));
     setTel('v_cmd', Number(v));
     setTel('xdot', Number(xd));
     setTel('thetadot', Number(thd));
@@ -260,6 +282,7 @@ async function connect() {
   disconnecting = false;
   currentPos = null;
   resetTelemetry();
+  setLqrState(0);
   setStatus('connected', 'on');
   log('--- connected (115200) ---');
   updateControls();
@@ -338,6 +361,9 @@ disconnectBtn.addEventListener('click', disconnect);
 
 stopBtn.addEventListener('click', () => sendCommand('stop'));
 goBtn.addEventListener('click', () => sendCommand('go'));
+balanceBtn.addEventListener('click', () => {
+  sendCommand(lqrState === 0 ? 'balance' : 'stop');
+});
 resetBtn.addEventListener('click', () => sendCommand('reset'));
 applyParamsBtn.addEventListener('click', async () => {
   await sendCommand(`mode ${modeSelect.value}`);

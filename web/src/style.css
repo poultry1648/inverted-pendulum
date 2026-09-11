@@ -249,7 +249,8 @@ button:disabled {
   width: 100%;
 }
 
-#calmode.active {
+#calmode.active,
+#balance.active {
   border-color: var(--accent);
   color: var(--accent);
 }

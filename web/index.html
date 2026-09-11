@@ -69,6 +69,7 @@
               <option value="vel">vel</option>
               <option value="square">square</option>
               <option value="sine">sine</option>
+              <option value="lqr">lqr</option>
             </select>
           </label>
           <label class="param">
@@ -91,6 +92,17 @@
             <span class="param-label">&nbsp;</span>
             <button id="apply-params" type="button" disabled>Apply</button>
           </label>
+        </div>
+      </section>
+
+      <section class="controls">
+        <h2>Balance (LQR)</h2>
+        <div class="buttons">
+          <button id="balance" type="button" disabled>Balance</button>
+        </div>
+        <div class="sub">
+          state: <span id="balance-state">off</span> &middot;
+          hold the pole near upright, then release once it engages
         </div>
       </section>
 

@@ -1,12 +1,14 @@
 /*
  * control.h — core 1 real-time loop and the core 0 <-> core 1 interface.
  *
- * Core 1 runs a self-clocked 1 kHz loop: sample pot, estimate state, produce a
- * placeholder velocity command, emit steps (motion.c), check safety and publish
- * a telemetry snapshot. Core 0 posts commands and reads snapshots.
+ * Core 1 runs a self-clocked 1 kHz loop: sample pot, estimate state, run the
+ * selected control law (placeholder modes or the cart-pole LQR), emit steps
+ * (motion.c), check safety and publish a telemetry snapshot. Core 0 posts
+ * commands and reads snapshots.
  *
- * The controller here is a STAGE 1 PLACEHOLDER; a real LQR law replaces
- * placeholder_velocity() later without touching the plumbing.
+ * CTRL_MODE_LQR drives the cart-pole LQR (gains in lqr_gains.h) through an
+ * auto-arm state machine: selecting the mode waits until the pole is near
+ * upright, then engages on its own; a large tilt disengages back to waiting.
  */
 #ifndef CONTROL_H
 #define CONTROL_H
@@ -20,7 +22,15 @@ typedef enum {
     CTRL_MODE_CONST_VEL,      /* v = vel */
     CTRL_MODE_SQUARE_VEL,     /* +/- amp, freq Hz */
     CTRL_MODE_SINE_VEL,       /* amp * sin(2*pi*freq*t) */
+    CTRL_MODE_LQR,            /* cart-pole LQR with auto-arm state machine */
 } control_mode_t;
+
+/* LQR auto-arm state (only meaningful while mode == CTRL_MODE_LQR). */
+typedef enum {
+    LQR_OFF = 0,     /* not balancing */
+    LQR_WAITING = 1, /* armed to engage; output 0, tilt trip bypassed */
+    LQR_ACTIVE = 2,  /* law running */
+} lqr_state_t;
 
 typedef enum {
     CMD_STOP = 0,   /* zero output, select idle */
@@ -57,6 +67,10 @@ typedef struct {
     float    deg_per_count;
     uint8_t  calmode;
     uint32_t cal_seq;
+    /* LQR auto-arm state, cart centering reference and its integral. */
+    uint8_t  lqr_state;      /* lqr_state_t */
+    float    x_ref_mm;
+    float    lqr_xi;         /* m*s: integral of (x - x_ref); clamp = windup */
 } telemetry_t;
 
 void control_start(void);                       /* launch core 1 (call on core 0) */

@@ -26,6 +26,11 @@
 #define STEPS_PER_MM       (STEPS_PER_REV / MM_PER_REV)        /* 80 steps/mm */
 
 #define AXIS_TRAVEL_MM     350.0f      /* soft limit: rejects bad targets */
+/* Latch a fault if the cart comes within this of either hard stop (0 or
+ * AXIS_TRAVEL_MM). Checked only while the LQR is actively balancing, and armed
+ * only after the cart has been clear once, so the parked-at-boot position does
+ * not fault immediately. */
+#define AXIS_END_MARGIN_MM 10.0f
 
 /* Fixed-rate control loop: self-clocked at CONTROL_HZ, DT_US per tick. */
 #define CONTROL_HZ         1000
@@ -33,9 +38,11 @@
 #define DT_S               (1.0f / (float)CONTROL_HZ)
 
 /* A stepper told to jump velocity stalls, so the command is always rate-limited
- * by MAX_CART_ACCEL_MM_S2 before becoming steps; MAX_CART_VEL_MM_S is the cap. */
-#define MAX_CART_VEL_MM_S    300.0f
-#define MAX_CART_ACCEL_MM_S2 3000.0f
+ * by MAX_CART_ACCEL_MM_S2 before becoming steps; MAX_CART_VEL_MM_S is the cap.
+ * Sized with headroom for the LQR balancer (which can demand ~1 m/s and several
+ * m/s^2 during a catch) so the clamps do not fight the controller. */
+#define MAX_CART_VEL_MM_S    1000.0f
+#define MAX_CART_ACCEL_MM_S2 10000.0f
 
 /* Safety: a tilt outside the plausible band, or a sustained run of missed
  * deadlines, latches a fault until reset. */
@@ -78,8 +85,11 @@
  *   mounting direction: make it positive if a RIGHT tilt increases raw, negative
  *   if a RIGHT tilt decreases raw. Both values are overridable at runtime via
  *   motion_pot_set_upright()/motion_pot_set_scale(). */
-#define THETA_UPRIGHT_RAW   2398 
-#define THETA_DEG_PER_COUNT 0.252809 
+#define THETA_UPRIGHT_RAW   2408
+/* On this rig a RIGHT (+x) tilt DECREASES raw, so the scale is negative to keep
+ * the documented convention (theta > 0 = pole tilts RIGHT). This also matches
+ * what `cal <deg>` derives when the pole is held to the right. */
+#define THETA_DEG_PER_COUNT (-0.252809)
 
 void motion_init(void);                 /* E pins up, de-energized, x = 0 */
 void motion_enable(bool on);            /* ENABLE is active-low */

@@ -7,6 +7,7 @@
  */
 #include "control.h"
 #include "motion.h"
+#include "lqr_gains.h"
 #include "pico/stdlib.h"
 #include "pico/multicore.h"
 #include "pico/time.h"
@@ -15,11 +16,33 @@
 #include "hardware/sync.h"
 #include <math.h>
 
-/* PLACEHOLDER (Stage 1): bench-only gains, replaced by the LQR law later. */
+/* PLACEHOLDER (Stage 1): bench-only gains, kept for the non-LQR modes. */
 #define POS_HOLD_KP          4.0f
 #define THETA_DOT_LPF_ALPHA  0.15f   /* 1st-order low-pass on dtheta/dt */
 #define XDOT_LPF_ALPHA       0.25f   /* 1st-order low-pass on dx/dt */
 #define TWO_PI               6.28318530718f
+#define DEG2RAD              0.017453292519943295f
+
+/* ---- Cart-pole LQR auto-arm thresholds ---------------------------------
+ * Selecting CTRL_MODE_LQR enters LQR_WAITING (output 0, tilt trip bypassed) so
+ * the pole can be placed by hand. It engages automatically once the pole is
+ * close enough to upright; a large tilt drops back to waiting (auto-recatch).
+ * DISARM_TILT_DEG must exceed ARM_TILT_DEG for hysteresis; MAX_TILT_DEG in
+ * motion.h stays a hard fault backstop while active. */
+#define ARM_TILT_DEG      12.0f   /* |theta| below this -> engage */
+#define ARM_RATE_DPS      60.0f   /* ...and |thetadot| below this (deg/s) */
+#define DISARM_TILT_DEG   30.0f   /* |theta| above this -> disengage to waiting */
+
+/* Cart centering. x_ref defaults to the middle of the travel range so the LQR
+ * position term plus its xi integrator pull the cart back to center and null
+ * any small upright-calibration bias (a constant theta offset otherwise looks
+ * like a constant acceleration and makes the cart creep to one end).
+ * LQR_XI_CLAMP bounds the position-error integral (m*s) against windup. The
+ * steady xi that cancels a theta bias b is -LQR_K2*b/LQR_K4, so 5.0 covers
+ * roughly a 7 deg zero error; if the reported xi sits at the clamp the cart
+ * will creep, which is the signal to re-zero or raise this. */
+#define CART_CENTER_MM    (AXIS_TRAVEL_MM * 0.5f)
+#define LQR_XI_CLAMP      5.0f
 
 /* ---- Core 0 -> core 1 commands: SDK queue (core-safe, never blocks) ---- */
 typedef struct { uint8_t type, mode; float value; } cmd_t;
@@ -59,6 +82,13 @@ static float          g_amp       = 50.0f;   /* mm/s */
 static float          g_freq      = 0.5f;    /* Hz   */
 static float          g_vel       = 50.0f;   /* mm/s */
 
+/* LQR: velocity integrator, position-error integral, centering reference and
+ * auto-arm state. */
+static lqr_state_t g_lqr_state = LQR_OFF;
+static float       g_lqr_v_cmd = 0.0f;   /* mm/s: integrates the accel command */
+static float       g_lqr_xi    = 0.0f;   /* m*s: integral of (x - x_ref) */
+static float       g_x_ref_mm  = 0.0f;   /* cart target; center by default */
+
 static float g_x_prev     = 0.0f;
 static float g_theta_prev = 0.0f;
 static float g_thetadot   = 0.0f;
@@ -72,6 +102,7 @@ static uint32_t g_period_count = 0;
 static uint32_t g_missed       = 0;   /* cumulative, for telemetry */
 static uint32_t g_miss_streak  = 0;   /* consecutive, for the fault */
 static bool     g_faulted      = false;
+static bool     g_travel_armed = false; /* clear of both stops at least once */
 
 /* Calibration: `zero` averages raw for ~1 s on core 1, `cal` derives the signed
  * scale from a raw sample, and calmode suspends the tilt trip during the sweep.
@@ -87,10 +118,32 @@ static uint32_t g_cal_seq     = 0;
 
 static void apply_cmd(uint8_t type, uint8_t mode, float value) {
     switch (type) {
-    case CMD_STOP:   g_mode = CTRL_MODE_IDLE; break;
+    case CMD_STOP:
+        g_mode = CTRL_MODE_IDLE;
+        g_lqr_state = LQR_OFF;          /* `stop` leaves balance mode */
+        g_lqr_v_cmd = 0.0f;
+        g_lqr_xi    = 0.0f;
+        break;
     case CMD_GO:     if (g_mode == CTRL_MODE_IDLE) g_mode = CTRL_MODE_POSITION_HOLD; break;
-    case CMD_TARGET: g_target_mm = value; g_mode = CTRL_MODE_POSITION_HOLD; break;
-    case CMD_MODE:   if (mode <= CTRL_MODE_SINE_VEL) g_mode = (control_mode_t)mode; break;
+    case CMD_TARGET:
+        g_target_mm = value;
+        /* While balancing a numeric target is a soft cart recentering, not a
+         * mode switch; otherwise it selects position-hold as before. */
+        if (g_mode == CTRL_MODE_LQR) g_x_ref_mm = value;
+        else                         g_mode = CTRL_MODE_POSITION_HOLD;
+        break;
+    case CMD_MODE:
+        if (mode <= CTRL_MODE_LQR) {
+            g_mode = (control_mode_t)mode;
+            if (g_mode == CTRL_MODE_LQR) {
+                g_lqr_state = LQR_WAITING;   /* re-arms on every entry */
+                g_lqr_v_cmd = 0.0f;
+                g_lqr_xi    = 0.0f;
+            } else {
+                g_lqr_state = LQR_OFF;
+            }
+        }
+        break;
     case CMD_AMP:    g_amp  = value; break;
     case CMD_FREQ:   g_freq = value; break;
     case CMD_VEL:    g_vel  = value; break;
@@ -100,7 +153,13 @@ static void apply_cmd(uint8_t type, uint8_t mode, float value) {
         g_missed = g_miss_streak = 0;
         g_period_min = 0xFFFFFFFFu;
         g_period_max = g_period_sum = g_period_count = 0;
+        g_travel_armed = false;   /* re-arm once the cart is clear again */
         motion_fault_clear();
+        if (g_mode == CTRL_MODE_LQR) {   /* reset re-arms balance */
+            g_lqr_state = LQR_WAITING;
+            g_lqr_v_cmd = 0.0f;
+            g_lqr_xi    = 0.0f;
+        }
         break;
     case CMD_ZERO:
         g_zeroing = true;           /* accumulate raw over ZERO_AVG_TICKS */
@@ -123,7 +182,60 @@ static void apply_cmd(uint8_t type, uint8_t mode, float value) {
     }
 }
 
-/* PLACEHOLDER: swap this whole function for the LQR law later. */
+/* Cart-pole LQR. u is a desired cart acceleration (m/s^2) computed from the SI
+ * state; it is integrated into the velocity command motion_emit() consumes.
+ * Sign check: theta > 0 (pole tipped RIGHT) must give u > 0 (accelerate RIGHT),
+ * i.e. LQR_K2 < 0; tools/lqr_design.py asserts this. Inputs are converted here
+ * (mm, deg) so K stays pure SI. */
+static float lqr_velocity(float x_mm, float xdot_mm_s,
+                          float theta_deg, float thetadot_deg_s) {
+    if (g_lqr_state != LQR_ACTIVE) return 0.0f;
+
+    float dx  = (x_mm - g_x_ref_mm) * 1e-3f;   /* m   */
+    float xd  = xdot_mm_s * 1e-3f;             /* m/s */
+    float th  = theta_deg * DEG2RAD;           /* rad */
+    float thd = thetadot_deg_s * DEG2RAD;      /* rad/s */
+
+    /* Position-error integral: drives steady-state cart error to zero (and so
+     * rejects the theta-bias creep). Clamped for anti-windup. */
+    g_lqr_xi += dx * DT_S;
+    if (g_lqr_xi >  LQR_XI_CLAMP) g_lqr_xi =  LQR_XI_CLAMP;
+    if (g_lqr_xi < -LQR_XI_CLAMP) g_lqr_xi = -LQR_XI_CLAMP;
+
+    float u = -(LQR_K0 * dx + LQR_K1 * xd + LQR_K2 * th + LQR_K3 * thd
+                + LQR_K4 * g_lqr_xi);
+
+    g_lqr_v_cmd += u * 1000.0f * DT_S;         /* m/s^2 -> mm/s */
+    if (g_lqr_v_cmd >  MAX_CART_VEL_MM_S) g_lqr_v_cmd =  MAX_CART_VEL_MM_S;
+    if (g_lqr_v_cmd < -MAX_CART_VEL_MM_S) g_lqr_v_cmd = -MAX_CART_VEL_MM_S;
+    return g_lqr_v_cmd;
+}
+
+/* Auto-arm transitions, run after the safety trip: WAITING -> ACTIVE once the
+ * pole is near upright and slow, ACTIVE -> WAITING (auto-recatch) on a large
+ * tilt. MAX_TILT_DEG has already been enforced as the hard backstop while
+ * ACTIVE by the time a disengage happens. */
+static void lqr_update_state(float theta_deg, float thetadot_deg_s) {
+    if (g_mode != CTRL_MODE_LQR) { g_lqr_state = LQR_OFF; return; }
+
+    if (g_lqr_state == LQR_WAITING) {
+        if (fabsf(theta_deg) < ARM_TILT_DEG &&
+            fabsf(thetadot_deg_s) < ARM_RATE_DPS) {
+            g_lqr_state = LQR_ACTIVE;
+            g_lqr_v_cmd = 0.0f;            /* start from rest */
+            g_lqr_xi    = 0.0f;            /* no inherited centering windup */
+            g_x_ref_mm  = CART_CENTER_MM;  /* balance about mid-travel */
+        }
+    } else if (g_lqr_state == LQR_ACTIVE) {
+        if (fabsf(theta_deg) > DISARM_TILT_DEG) {
+            g_lqr_state = LQR_WAITING;   /* auto-recatch */
+            g_lqr_v_cmd = 0.0f;
+            g_lqr_xi    = 0.0f;
+        }
+    }
+}
+
+/* PLACEHOLDER: kept for the non-LQR modes. */
 static float placeholder_velocity(float x_mm, uint32_t tick) {
     float t = (float)tick * DT_S;
     switch (g_mode) {
@@ -181,6 +293,10 @@ static void control_core1_entry(void) {
         g_x_prev     = x_mm;
         g_theta_prev = theta;
 
+        /* Travel-limit safety: arm once the cart has been clear of both stops. */
+        if (x_mm > AXIS_END_MARGIN_MM && x_mm < AXIS_TRAVEL_MM - AXIS_END_MARGIN_MM)
+            g_travel_armed = true;
+
         /* Calibration: scale is degrees-per-count, so at the known angle A:
          *   A = (raw - upright) * scale  ->  scale = A / (raw - upright). */
         if (g_cal_pending) {
@@ -201,16 +317,42 @@ static void control_core1_entry(void) {
             }
         }
 
-        /* Safety: latch, zero output, de-energize. calmode bypasses only the
-         * tilt trip; missed deadlines still fault. */
-        if (!g_faulted &&
-            ((!g_calmode && fabsf(theta) > MAX_TILT_DEG) ||
-             g_miss_streak > DEADLINE_MISS_FAULT)) {
+        /* Safety: latch, zero output, de-energize. Evaluated before the LQR
+         * state update so MAX_TILT_DEG is a real backstop while ACTIVE. The
+         * generic tilt trip is bypassed while LQR is disarmed (waiting/off),
+         * where the pole may be held far from upright by hand. calmode bypasses
+         * the trip globally; missed deadlines still fault. */
+        bool lqr_active = (g_mode == CTRL_MODE_LQR && g_lqr_state == LQR_ACTIVE);
+        bool tilt_trip  = (!g_calmode && fabsf(theta) > MAX_TILT_DEG);
+        if (g_mode == CTRL_MODE_LQR && !lqr_active) tilt_trip = false;
+        /* Fault before the carriage can slam a hard stop while balancing. */
+        bool travel_trip = (lqr_active && g_travel_armed &&
+                            (x_mm < AXIS_END_MARGIN_MM ||
+                             x_mm > AXIS_TRAVEL_MM - AXIS_END_MARGIN_MM));
+        if (!g_faulted && (tilt_trip || travel_trip ||
+                           g_miss_streak > DEADLINE_MISS_FAULT)) {
             g_faulted = true;
             motion_fault_latch();
+            if (g_mode == CTRL_MODE_LQR) {
+                g_lqr_state = LQR_WAITING;
+                g_lqr_v_cmd = 0.0f;
+                g_lqr_xi    = 0.0f;
+            }
         }
 
-        float v_cmd = g_faulted ? 0.0f : placeholder_velocity(x_mm, g_tick);
+        /* LQR auto-arm: engage near upright, disengage on a large tilt. Skipped
+         * while faulted so a reset is required to recover. */
+        if (!g_faulted) lqr_update_state(theta, g_thetadot);
+
+        float v_cmd;
+        if (g_faulted) {
+            v_cmd = 0.0f;
+            g_lqr_v_cmd = 0.0f;
+        } else if (g_mode == CTRL_MODE_LQR) {
+            v_cmd = lqr_velocity(x_mm, g_xdot, theta, g_thetadot);
+        } else {
+            v_cmd = placeholder_velocity(x_mm, g_tick);
+        }
 
         /* Clamp, accumulate and emit evenly across the remaining tick. */
         motion_emit(v_cmd, get_absolute_time(), next);
@@ -234,6 +376,9 @@ static void control_core1_entry(void) {
             .deg_per_count = motion_pot_deg_per_count(),
             .calmode = g_calmode ? 1 : 0,
             .cal_seq = g_cal_seq,
+            .lqr_state = (uint8_t)g_lqr_state,
+            .x_ref_mm = g_x_ref_mm,
+            .lqr_xi = g_lqr_xi,
         };
         telemetry_publish(&t);
         g_tick++;

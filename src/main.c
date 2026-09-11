@@ -42,8 +42,8 @@ static void heaters_off(void) {
 }
 
 static const char *mode_name(uint8_t m) {
-    static const char *names[] = { "idle", "hold", "vel", "square", "sine" };
-    return m <= CTRL_MODE_SINE_VEL ? names[m] : "?";
+    static const char *names[] = { "idle", "hold", "vel", "square", "sine", "lqr" };
+    return m <= CTRL_MODE_LQR ? names[m] : "?";
 }
 
 static int mode_from_name(const char *s) {
@@ -53,6 +53,7 @@ static int mode_from_name(const char *s) {
     if (!strcmp(s, "vel") || !strcmp(s, "const")) return CTRL_MODE_CONST_VEL;
     if (!strcmp(s, "square")) return CTRL_MODE_SQUARE_VEL;
     if (!strcmp(s, "sine")) return CTRL_MODE_SINE_VEL;
+    if (!strcmp(s, "lqr") || !strcmp(s, "balance")) return CTRL_MODE_LQR;
     return s[0] >= '0' && s[0] <= '9' ? atoi(s) : -1;
 }
 
@@ -69,6 +70,9 @@ static void handle_line(char *line) {
     } else if (!strcmp(cmd, "go") || !strcmp(cmd, "start")) {
         control_post_cmd(CMD_GO, 0, 0);
         printf("go\n");
+    } else if (!strcmp(cmd, "balance") || !strcmp(cmd, "bal")) {
+        control_post_cmd(CMD_MODE, CTRL_MODE_LQR, 0);
+        printf("balance: LQR armed, waiting for pole near upright...\n");
     } else if (!strcmp(cmd, "reset")) {
         control_post_cmd(CMD_RESET, 0, 0);
         printf("reset\n");
@@ -100,7 +104,7 @@ static void handle_line(char *line) {
         }
     } else if (!strcmp(cmd, "mode")) {
         int m = mode_from_name(arg);
-        if (m < 0) printf("usage: mode idle|hold|vel|square|sine|<n>\n");
+        if (m < 0) printf("usage: mode idle|hold|vel|square|sine|lqr|<n>\n");
         else {
             control_post_cmd(CMD_MODE, (uint8_t)m, 0);
             printf("mode %s\n", mode_name(m));
@@ -142,9 +146,10 @@ int main(void) {
      * axis. Stage 1 assumes the carriage is parked at the left stop (x = 0). */
 
     printf("\nSKR Pico ready. Range 0..%.0f mm (0 = left).\n", AXIS_TRAVEL_MM);
-    printf("  <number>   go to absolute mm (position-hold)\n");
+    printf("  <number>   go to absolute mm (position-hold; recenters in LQR)\n");
     printf("  go|stop|reset\n");
-    printf("  mode hold|vel|square|sine|idle\n");
+    printf("  balance    LQR balance, auto-arms when the pole is near upright\n");
+    printf("  mode hold|vel|square|sine|idle|lqr\n");
     printf("  vel <mm/s>  amp <mm/s>  freq <hz>  kp <gain>\n");
     printf("Calibration (theta is signed from upright, +RIGHT):\n");
     printf("  calmode on|off   suspend/restore the tilt safety trip\n");
@@ -185,12 +190,13 @@ int main(void) {
         if (have && now - last_dbg >= 1000) {
             last_dbg = now;
             printf("dbg tick=%lu steps=%ld jit=%lu/%lu/%lu us miss=%lu fault=%lu "
-                   "mode=%s v=%.1f xd=%.1f thd=%.1f\n",
+                   "mode=%s lqr=%u xref=%.2f xi=%.3f v=%.1f xd=%.1f thd=%.1f\n",
                    (unsigned long)t.tick, (long)t.x_steps,
                    (unsigned long)t.period_min_us,
                    (unsigned long)t.period_mean_us, (unsigned long)t.period_max_us,
                    (unsigned long)t.missed, (unsigned long)t.fault,
-                   mode_name(t.mode), t.v_cmd, t.xdot, t.thetadot);
+                   mode_name(t.mode), (unsigned)t.lqr_state, t.x_ref_mm,
+                   t.lqr_xi, t.v_cmd, t.xdot, t.thetadot);
         }
 
         int c = getchar_timeout_us(0);

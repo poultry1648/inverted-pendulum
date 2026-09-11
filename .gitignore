@@ -1,4 +1,6 @@
 /build/
+web/node_modules/
+web/dist/
 *.uf2
 *.elf
 *.bin

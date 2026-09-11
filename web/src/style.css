@@ -1,0 +1,164 @@
+:root {
+  color-scheme: dark;
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --bg: #0f1216;
+  --panel: #171c22;
+  --border: #2a333d;
+  --text: #e6edf3;
+  --muted: #8b98a5;
+  --accent: #4ea1ff;
+  --on: #3fb950;
+  --error: #f85149;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background: var(--bg);
+  color: var(--text);
+}
+
+.app {
+  max-width: 820px;
+  margin: 0 auto;
+  padding: 24px;
+}
+
+.bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 24px;
+}
+
+h1 {
+  font-size: 20px;
+  margin: 0;
+  letter-spacing: 0.5px;
+}
+
+.conn {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+button {
+  font: inherit;
+  padding: 8px 14px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--text);
+  cursor: pointer;
+}
+
+button:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+
+button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.status {
+  font-size: 13px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  color: var(--muted);
+}
+
+.status--on {
+  color: var(--on);
+  border-color: var(--on);
+}
+
+.status--error {
+  color: var(--error);
+  border-color: var(--error);
+}
+
+.readouts {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  margin-bottom: 24px;
+}
+
+.card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 20px;
+}
+
+.card h2 {
+  margin: 0 0 12px;
+  font-size: 13px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: var(--muted);
+}
+
+.value {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.number {
+  font-size: 52px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+
+.unit {
+  font-size: 18px;
+  color: var(--muted);
+}
+
+.sub {
+  margin-top: 10px;
+  font-size: 13px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.log h2 {
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: var(--muted);
+}
+
+#log {
+  margin: 0;
+  height: 220px;
+  overflow-y: auto;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 14px;
+  font-size: 12.5px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+@media (max-width: 560px) {
+  .readouts {
+    grid-template-columns: 1fr;
+  }
+  .number {
+    font-size: 44px;
+  }
+}

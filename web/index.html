@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>SKR Pico Monitor</title>
+  </head>
+  <body>
+    <main class="app">
+      <header class="bar">
+        <h1>SKR Pico</h1>
+        <div class="conn">
+          <span id="status" class="status status--off">disconnected</span>
+          <button id="connect" type="button">Connect</button>
+          <button id="disconnect" type="button" disabled>Disconnect</button>
+        </div>
+      </header>
+
+      <section class="readouts">
+        <article class="card">
+          <h2>Cart position</h2>
+          <div class="value">
+            <span id="cart-value" class="number">--</span>
+            <span class="unit">mm</span>
+          </div>
+        </article>
+
+        <article class="card">
+          <h2>Potentiometer</h2>
+          <div class="value">
+            <span id="pot-value" class="number">--</span>
+            <span class="unit">deg</span>
+          </div>
+          <div class="sub">raw <span id="pot-raw">--</span></div>
+        </article>
+      </section>
+
+      <section class="log">
+        <h2>Serial log</h2>
+        <pre id="log"></pre>
+      </section>
+    </main>
+
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>

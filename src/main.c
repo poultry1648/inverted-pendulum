@@ -59,8 +59,8 @@
  * maximum positions. Read the "raw=" number printed in the terminal at each
  * end of travel and put those values here; the angle then maps cleanly across
  * 0..POT_ANGLE_DEG. */
-#define POT_RAW_MIN 0.0f
-#define POT_RAW_MAX 4095.0f
+#define POT_RAW_MIN 20.0f
+#define POT_RAW_MAX 2753.0f
 
 /* Absolute carriage position, in microsteps, measured right from the left end. */
 static int32_t g_pos_steps = 0;
@@ -198,7 +198,8 @@ int main(void) {
             last = now;
             float raw;
             float angle = pot_read(&raw);
-            printf("TH0 raw=%4.0f  %5.1f deg\n", raw, angle);
+            printf("pos=%6.2f mm  TH0 raw=%4.0f  %5.1f deg\n",
+                   g_pos_steps / STEPS_PER_MM, raw, angle);
         }
 
         int c = getchar_timeout_us(0);

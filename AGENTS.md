@@ -19,8 +19,9 @@ the only verification.
 
 - `src/skr_pico.h` — board pin map, the single source of truth for every GPIO.
 - `src/main.c` — the app: reads a target coordinate (mm) over USB serial and
-  moves the E-axis belt carriage there. Position is dead-reckoned from
-  `carriage parked at left == 0 mm`; there is no homing/endstop.
+  moves the E-axis belt carriage there. At boot it runs open-loop hard-stop
+  homing (`home_axis()`): it creeps LEFT into the stop, declares that 0 mm, and
+  backs off `HOME_BACKOFF_MM`. There is no endstop. Sending `home` re-homes.
 - `src/tmc2209.c/h` — minimal write-only TMC2209 config over single-wire UART.
 - `web/` — Vite app (Web Serial) that shows cart position and pot angle and
   sends move commands; it speaks the same line protocol as the terminal.

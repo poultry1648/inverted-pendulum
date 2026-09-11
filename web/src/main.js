@@ -8,6 +8,7 @@ const potEl = document.getElementById('pot-value');
 const potRawEl = document.getElementById('pot-raw');
 const maxTravelEl = document.getElementById('max-travel');
 const logEl = document.getElementById('log');
+const goZeroBtn = document.getElementById('go-zero');
 const homeBtn = document.getElementById('home');
 const moveButtons = Array.from(document.querySelectorAll('button[data-delta]'));
 
@@ -41,6 +42,7 @@ function updateControls() {
   const connected = port !== null && writer !== null;
   connectBtn.disabled = connected;
   disconnectBtn.disabled = !connected;
+  goZeroBtn.disabled = !connected;
   homeBtn.disabled = !connected;
   const canJog = connected && currentPos !== null;
   for (const btn of moveButtons) btn.disabled = !canJog;
@@ -70,6 +72,9 @@ function handleLine(rawLine) {
   const movedMatch = line.match(/(?:moved (?:left|right) to|already at)\s+(-?\d+(?:\.\d+)?)\s*mm/);
   if (movedMatch) setCart(Number(movedMatch[1]));
 
+  const homedMatch = line.match(/Homing: backed off to\s+(-?\d+(?:\.\d+)?)\s*mm/);
+  if (homedMatch) setCart(Number(homedMatch[1]));
+
   const potMatch = line.match(/raw=\s*(\d+)\s+(-?\d+(?:\.\d+)?)\s*deg/);
   if (potMatch) {
     potRawEl.textContent = potMatch[1];
@@ -84,6 +89,16 @@ async function sendCoord(mm) {
   try {
     await writer.write(encoder.encode(text));
     log(`>> ${text.trim()} mm`);
+  } catch (err) {
+    log(`Write error: ${err.message}`);
+  }
+}
+
+async function sendHome() {
+  if (!writer) return;
+  try {
+    await writer.write(encoder.encode('home\n'));
+    log('>> home');
   } catch (err) {
     log(`Write error: ${err.message}`);
   }
@@ -190,6 +205,7 @@ for (const btn of moveButtons) {
   });
 }
 
-homeBtn.addEventListener('click', () => sendCoord(0));
+goZeroBtn.addEventListener('click', () => sendCoord(0));
+homeBtn.addEventListener('click', sendHome);
 connectBtn.addEventListener('click', connect);
 disconnectBtn.addEventListener('click', disconnect);

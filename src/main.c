@@ -11,13 +11,15 @@
  *   - The motor's "forward" rotation (DIR=1) moves the carriage LEFT, so moving
  *     toward a larger coordinate requires the REVERSE direction.
  *
- * IMPORTANT: position is dead-reckoned from the 0 = left assumption. There is no
- * homing/endstop here, so power on with the carriage physically at the left end.
+ * IMPORTANT: position is established by open-loop hard-stop homing at boot:
+ * the carriage is crept into the LEFT stop, that position is declared 0, then
+ * the carriage backs off to the right by HOME_BACKOFF_MM. There is no endstop.
  *
  * NOTE: motors are powered from the board's VM input (stepper PSU), not USB.
  */
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <math.h>
 #include "pico/stdlib.h"
 #include "hardware/adc.h"
@@ -49,6 +51,19 @@
 #define STEP_START_US      350   /* gap for the first/last step (slow ends) */
 #define STEP_MIN_US        50    /* gap at cruise (top speed) */
 #define STEP_RAMP          600   /* steps spent accelerating (and decelerating) */
+
+/* ---- Open-loop hard-stop homing ----
+ * There is no endstop, so homing deliberately drives the carriage into the
+ * LEFT hard stop and lets the motor skip steps against it (open-loop). That
+ * pressed position becomes 0 mm. The creep uses a slow constant inter-pulse gap
+ * (no acceleration ramp) so the stall is gentle; HOME_OVERTRAVEL_MM must exceed
+ * the full travel so the stop is reached from anywhere on the axis, and
+ * HOME_MAX_STEPS hard-bounds the move so homing always terminates even if the
+ * carriage jams. */
+#define HOME_CREEP_GAP_US   600                             /* ~20 mm/s creep */
+#define HOME_OVERTRAVEL_MM  (AXIS_TRAVEL_MM + 20.0f)        /* > full travel */
+#define HOME_BACKOFF_MM     15.0f                           /* clear the stop */
+#define HOME_MAX_STEPS      ((uint32_t)(HOME_OVERTRAVEL_MM * STEPS_PER_MM) + 1u)
 
 /* Potentiometer on TH0 (GPIO26 = ADC0). Full-scale electrical rotation of the
  * pot, in degrees; adjust to match the actual part (most single-turn pots ~300). */
@@ -130,6 +145,17 @@ static void e_step(uint32_t count) {
     }
 }
 
+/* Emit `count` step pulses at a fixed inter-pulse gap (no accel ramp). Used by
+ * homing, where a slow constant creep into the stop is wanted. */
+static void e_step_const(uint32_t count, uint32_t gap_us) {
+    for (uint32_t i = 0; i < count; i++) {
+        gpio_put(SKR_E_STEP_PIN, 1);
+        sleep_us(STEP_HIGH_US);
+        gpio_put(SKR_E_STEP_PIN, 0);
+        sleep_us(gap_us);
+    }
+}
+
 /* Move the carriage to an absolute coordinate (mm). Updates g_pos_steps. */
 static void move_to_mm(float target_mm) {
     int32_t target_steps = (int32_t)lroundf(target_mm * STEPS_PER_MM);
@@ -148,6 +174,27 @@ static void move_to_mm(float target_mm) {
     g_pos_steps = target_steps;
     printf("moved %s to %.2f mm\n",
            forward ? "left" : "right", g_pos_steps / STEPS_PER_MM);
+}
+
+/* Open-loop hard-stop homing. Creeps LEFT into the stop for more than the full
+ * travel, declares that pressed position 0, then backs off to the right by
+ * HOME_BACKOFF_MM. Blocking; call with the E driver configured and enabled. */
+static void home_axis(void) {
+    printf("Homing: creeping left to hard stop (max %u steps)...\n",
+           (unsigned)HOME_MAX_STEPS);
+    e_set_dir(true);                                  /* forward => LEFT */
+    e_step_const(HOME_MAX_STEPS, HOME_CREEP_GAP_US);
+
+    /* The carriage is now pressed against the left stop: reference zero. */
+    g_pos_steps = 0;
+    printf("Homing: left stop reached, position zeroed.\n");
+
+    /* Back off so the carriage is not resting on the stop. */
+    int32_t backoff_steps = (int32_t)lroundf(HOME_BACKOFF_MM * STEPS_PER_MM);
+    e_set_dir(false);                                 /* reverse => RIGHT */
+    e_step_const((uint32_t)backoff_steps, HOME_CREEP_GAP_US);
+    g_pos_steps = backoff_steps;
+    printf("Homing: backed off to %.2f mm.\n", g_pos_steps / STEPS_PER_MM);
 }
 
 /* Sample the pot on TH0. Returns angle in degrees; also reports the raw
@@ -175,8 +222,8 @@ int main(void) {
     e_axis_init();
     e_enable(true);
 
-    /* Carriage assumed parked at the left end == 0 mm. */
-    g_pos_steps = 0;
+    /* Establish a true zero by pressing into the left hard stop. */
+    home_axis();
 
     /* TH0 = GPIO26 = ADC0. */
     adc_init();
@@ -187,6 +234,7 @@ int main(void) {
            AXIS_TRAVEL_MM);
     printf("Potentiometer on TH0: angle printed as you turn it.\n");
     printf("Send a coordinate in mm and press enter to move the axis.\n");
+    printf("Send 'home' to re-home against the left stop.\n");
 
     char line[32];
     size_t n = 0;
@@ -208,6 +256,13 @@ int main(void) {
             if (n == 0) continue;               /* swallow blank lines / CRLF */
             line[n] = '\0';
             n = 0;
+
+            /* "home" (or "h"/"H") re-runs open-loop homing on demand. */
+            if (strcmp(line, "home") == 0 ||
+                (line[1] == '\0' && (line[0] == 'h' || line[0] == 'H'))) {
+                home_axis();
+                continue;
+            }
 
             char *end;
             float target_mm = strtof(line, &end);

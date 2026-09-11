@@ -36,3 +36,14 @@ pico_enable_stdio_uart(skr_pico_fw 0)
 
 # Produce .uf2 / .elf / .bin / .hex / map + disassembly.
 pico_add_extra_outputs(skr_pico_fw)
+
+# Convenience for the VS Code CMake Tools "Build" button: after the SDK has
+# generated skr_pico_fw.uf2, copy it onto a mounted RPI-RP2 BOOTSEL drive. The
+# script is a no-op when the board is not in boot mode, so it never fails a
+# build. Must stay after pico_add_extra_outputs() so the .uf2 already exists.
+add_custom_command(TARGET skr_pico_fw POST_BUILD
+    COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/scripts/flash_uf2.sh"
+            "${CMAKE_CURRENT_BINARY_DIR}/skr_pico_fw.uf2"
+    COMMENT "Copying skr_pico_fw.uf2 to the RPI-RP2 drive (if mounted)"
+    VERBATIM
+)

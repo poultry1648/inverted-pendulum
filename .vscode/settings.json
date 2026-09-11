@@ -1,0 +1,6 @@
+{
+  "cmake.useCMakePresets": "always",
+  "cmake.configureOnOpen": true,
+  "tasksStatusbar.taskLabelFilter": "Flash.*",
+  "tasksStatusbar.nameTemplate": "Flash SKR Pico"
+}

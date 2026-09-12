@@ -1,4 +1,5 @@
 import './style.css';
+import { solveLqr } from './lqr.js';
 
 const statusEl = document.getElementById('status');
 const connectBtn = document.getElementById('connect');
@@ -9,6 +10,7 @@ const potRawEl = document.getElementById('pot-raw');
 const maxTravelEl = document.getElementById('max-travel');
 const logEl = document.getElementById('log');
 const goZeroBtn = document.getElementById('go-zero');
+const goCenterBtn = document.getElementById('go-center');
 const homeBtn = document.getElementById('home');
 const moveButtons = Array.from(document.querySelectorAll('button[data-delta]'));
 
@@ -23,6 +25,58 @@ const kpInput = document.getElementById('kp-input');
 const applyParamsBtn = document.getElementById('apply-params');
 const balanceBtn = document.getElementById('balance');
 const balanceStateEl = document.getElementById('balance-state');
+
+/* ---- LQR design panel: Q weights -> K, solved in the browser ---- */
+const WEIGHTS = [
+  { key: 'qx',   label: 'Q x (cart pos)',      def: 0.666667, min: -2, max: 3 },
+  { key: 'qxd',  label: 'Q xdot (cart vel)',   def: 0.666667, min: -2, max: 3 },
+  { key: 'qth',  label: 'Q theta (angle)',     def: 66.6667,  min: -2, max: 3 },
+  { key: 'qthd', label: 'Q thetadot (ang vel)', def: 6.66667, min: -2, max: 3 },
+  { key: 'qxi',  label: 'Q xi (centering)',    def: 0.666667, min: -3, max: 2 },
+];
+const lqrWeightsEl = document.getElementById('lqr-weights');
+const lqrOutEl = document.getElementById('lqr-out');
+const lqrLInput = document.getElementById('lqr-l');
+const lqrGInput = document.getElementById('lqr-g');
+const lqrXiclampInput = document.getElementById('lqr-xiclamp');
+const lqrDeadbandInput = document.getElementById('lqr-deadband');
+const lqrSlewInput = document.getElementById('lqr-slew');
+const lqrApplyBtn = document.getElementById('lqr-apply');
+let lastSolve = null;
+let lqrCanApply = false;
+let solveTimer = null;
+
+/* Log-spaced sliders: position 0..1000 -> 10^(min..max), so weights spanning
+ * orders of magnitude stay tunable. */
+const logMap = (t, min, max) => 10 ** (min + t * (max - min));
+const logInv = (v, min, max) => (Math.log10(v) - min) / (max - min);
+const weightSlider = {};
+for (const w of WEIGHTS) {
+  const row = document.createElement('label');
+  row.className = 'param';
+  row.innerHTML =
+    `<span class="param-label">${w.label} <span class="wval"></span></span>` +
+    `<input type="range" min="0" max="1000" step="1" />`;
+  lqrWeightsEl.append(row);
+  const input = row.querySelector('input');
+  const valEl = row.querySelector('.wval');
+  input.value = String(Math.round(1000 * logInv(w.def, w.min, w.max)));
+  weightSlider[w.key] = { input, valEl, w };
+  input.addEventListener('input', () => { refreshWeightLabels(); scheduleSolve(); });
+}
+function refreshWeightLabels() {
+  for (const { input, valEl, w } of Object.values(weightSlider)) {
+    const v = logMap(Number(input.value) / 1000, w.min, w.max);
+    valEl.textContent = v >= 10 ? v.toFixed(0) : v.toFixed(2);
+  }
+}
+function readWeights() {
+  const out = {};
+  for (const [key, { input, w }] of Object.entries(weightSlider)) {
+    out[key] = logMap(Number(input.value) / 1000, w.min, w.max);
+  }
+  return out;
+}
 
 const calmodeBtn = document.getElementById('calmode');
 const zeroBtn = document.getElementById('zero');
@@ -129,6 +183,7 @@ function updateControls() {
   connectBtn.disabled = connected;
   disconnectBtn.disabled = !connected;
   goZeroBtn.disabled = !connected;
+  goCenterBtn.disabled = !connected;
   homeBtn.disabled = !connected;
   const canJog = connected && currentPos !== null;
   for (const btn of moveButtons) btn.disabled = !canJog;
@@ -140,6 +195,69 @@ function updateControls() {
   ]) {
     el.disabled = !connected;
   }
+  for (const el of [
+    lqrLInput, lqrGInput, lqrXiclampInput, lqrDeadbandInput, lqrSlewInput,
+    ...Object.values(weightSlider).map((s) => s.input),
+  ]) {
+    el.disabled = !connected;
+  }
+  lqrApplyBtn.disabled = !connected || !lqrCanApply;
+}
+
+function isConnected() {
+  return port !== null && writer !== null;
+}
+
+function scheduleSolve() {
+  if (solveTimer !== null) clearTimeout(solveTimer);
+  solveTimer = setTimeout(solveAndRender, 60);
+}
+
+/* Solve Q/R -> K in the browser and show the gains + closed-loop poles. */
+function solveAndRender() {
+  solveTimer = null;
+  const { qx, qxd, qth, qthd, qxi } = readWeights();
+  const l = Number(lqrLInput.value);
+  const g = Number(lqrGInput.value);
+  if (!(l > 0) || !(g > 0)) {
+    lqrOutEl.textContent = 'l and g must be positive';
+    lqrCanApply = false;
+    lqrApplyBtn.disabled = true;
+    return;
+  }
+  let res;
+  try {
+    res = solveLqr({ l, g, q: [qx, qxd, qth, qthd], qxi, r: 1 });
+  } catch (err) {
+    lqrOutEl.textContent = `solve failed: ${err.message}`;
+    lqrCanApply = false;
+    lqrApplyBtn.disabled = true;
+    return;
+  }
+  lastSolve = res;
+  lqrCanApply = res.stable && res.signOk;
+  const k = res.k.map((v, i) => `K${i}=${v.toFixed(4)}`).join('  ');
+  const poles = res.poles
+    .slice()
+    .sort((a, b) => a.re - b.re)
+    .map((p) => `${p.re.toFixed(3)}${p.im >= 0 ? '+' : '-'}${Math.abs(p.im).toFixed(3)}j`)
+    .join('  ');
+  lqrOutEl.textContent =
+    `${k}\npoles: ${poles}\n` +
+    `residual ${res.residual.toExponential(1)} \u00b7 ` +
+    `${res.stable ? 'stable' : 'UNSTABLE'} \u00b7 ` +
+    `sign ${res.signOk ? 'ok' : 'BAD'}`;
+  lqrApplyBtn.disabled = !(isConnected() && lqrCanApply);
+}
+
+async function applyLqr() {
+  if (!lastSolve) return;
+  for (let i = 0; i < 5; i++) {
+    await sendCommand(`set k${i} ${lastSolve.k[i].toFixed(6)}`);
+  }
+  await sendCommand(`set xiclamp ${Number(lqrXiclampInput.value)}`);
+  await sendCommand(`set deadband ${Number(lqrDeadbandInput.value)}`);
+  await sendCommand(`set slew ${Number(lqrSlewInput.value)}`);
 }
 
 function setCart(mm) {
@@ -206,6 +324,15 @@ function handleLine(rawLine) {
     setTel('v_cmd', Number(v));
     setTel('xdot', Number(xd));
     setTel('thetadot', Number(thd));
+  }
+
+  const limitsMatch = line.match(
+    /limits xiclamp=(-?\d+(?:\.\d+)?) deadband=(-?\d+(?:\.\d+)?) slew=(-?\d+(?:\.\d+)?)/
+  );
+  if (limitsMatch) {
+    lqrXiclampInput.value = limitsMatch[1];
+    lqrDeadbandInput.value = limitsMatch[2];
+    lqrSlewInput.value = limitsMatch[3];
   }
 }
 
@@ -286,6 +413,7 @@ async function connect() {
   setStatus('connected', 'on');
   log('--- connected (115200) ---');
   updateControls();
+  sendCommand('gains');   /* sync the live limits into the tuning panel */
 
   const decoder = new TextDecoderStream();
   readableClosed = port.readable.pipeTo(decoder.writable).catch(() => {});
@@ -355,6 +483,7 @@ for (const btn of moveButtons) {
 }
 
 goZeroBtn.addEventListener('click', () => sendCoord(0));
+goCenterBtn.addEventListener('click', () => sendCoord(175));
 homeBtn.addEventListener('click', sendHome);
 connectBtn.addEventListener('click', connect);
 disconnectBtn.addEventListener('click', disconnect);
@@ -388,3 +517,10 @@ cmdInput.addEventListener('keydown', (event) => {
     cmdInput.value = '';
   }
 });
+
+lqrApplyBtn.addEventListener('click', applyLqr);
+for (const el of [lqrLInput, lqrGInput]) el.addEventListener('input', scheduleSolve);
+
+refreshWeightLabels();
+solveAndRender();
+updateControls();

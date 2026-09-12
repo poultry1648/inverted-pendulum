@@ -42,11 +42,11 @@ import sys
 
 import numpy as np
 
-DEFAULT_L = 0.15          # pivot -> pole center of mass (m)
+DEFAULT_L = 0.2          # pivot -> pole center of mass (m)
 DEFAULT_G = 9.81          # gravity (m/s^2)
-DEFAULT_Q = (1.0, 0.1, 100.0, 10.0)   # diag: x, xdot, theta, thetadot
+DEFAULT_Q = (1.0, 1.0, 100.0, 10.0)   # diag: x, xdot, theta, thetadot
 DEFAULT_QXI = 1.0         # weight on the cart position-error integral (xi)
-DEFAULT_R = 0.5           # scalar control effort weight
+DEFAULT_R = 0.1           # scalar control effort weight
 
 
 def build_ab(l, g):

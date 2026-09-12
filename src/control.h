@@ -45,7 +45,21 @@ typedef enum {
     CMD_ZERO,       /* average pot ~1 s and set that raw as upright (theta=0) */
     CMD_CAL,        /* value = pole's known angle from upright; set signed scale */
     CMD_CALMODE,    /* value != 0 -> bypass the tilt trip while calibrating */
+    CMD_SET,        /* mode = param_id_t, value = new value (live tuning) */
 } control_cmd_type_t;
+
+/* Live-tunable LQR parameters, indexed by the `mode` field of CMD_SET. */
+typedef enum {
+    PARAM_K0 = 0,    /* gain on (x - x_ref), 1/m */
+    PARAM_K1,        /* gain on xdot, s/m */
+    PARAM_K2,        /* gain on theta, 1/rad (must stay < 0) */
+    PARAM_K3,        /* gain on thetadot, s/rad */
+    PARAM_K4,        /* gain on the position-error integral, 1/(m*s) */
+    PARAM_XI_CLAMP,  /* position-error integral clamp, m*s */
+    PARAM_DEADBAND,  /* centering deadband, mm */
+    PARAM_SLEW,      /* x_ref slew rate, mm/s */
+    PARAM_COUNT,
+} param_id_t;
 
 typedef struct {
     int32_t  x_steps;
@@ -71,6 +85,11 @@ typedef struct {
     uint8_t  lqr_state;      /* lqr_state_t */
     float    x_ref_mm;
     float    lqr_xi;         /* m*s: integral of (x - x_ref); clamp = windup */
+    /* Live LQR tuning snapshot (for `gains` readback / web sliders). */
+    float    lqr_k[5];       /* K0..K4 */
+    float    xi_clamp;       /* m*s */
+    float    center_deadband_mm;
+    float    x_ref_slew_mm_s;
 } telemetry_t;
 
 void control_start(void);                       /* launch core 1 (call on core 0) */

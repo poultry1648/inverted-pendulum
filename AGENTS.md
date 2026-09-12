@@ -23,8 +23,15 @@ the only verification.
   homing (`home_axis()`): it creeps LEFT into the stop, declares that 0 mm, and
   backs off `HOME_BACKOFF_MM`. There is no endstop. Sending `home` re-homes.
 - `src/tmc2209.c/h` — minimal write-only TMC2209 config over single-wire UART.
+- `src/control.c/h` — core 1 1 kHz loop: placeholder modes plus the cart-pole
+  LQR with an auto-arm state machine. The LQR gains are runtime values (seeded
+  from `src/lqr_gains.h`) and can be changed live with `set k0..k4 <gain>`
+  (`gains` prints them); `xiclamp`/`deadband`/`slew` are tunable too.
 - `web/` — Vite app (Web Serial) that shows cart position and pot angle and
   sends move commands; it speaks the same line protocol as the terminal.
+- `web/src/lqr.js` — browser port of `tools/lqr_design.py`: turns Q weights
+  (R fixed at 1) into K via Ackermann-seeded Kleinman-Newton, and reports the
+  closed-loop poles. The "LQR design" panel solves live and applies via `set`.
 
 ## Web UI
 
@@ -64,3 +71,8 @@ range parsed from the boot banner.
   connection alone configures the driver but won't turn the motor.
 - `build/`, `.uf2`, `.elf`, `.bin`, `.hex`, `.dis`, `.map` are gitignored; the
   `build/` dir is a CMake artifact and `lib/pico-sdk` is a submodule.
+- `set k2` is rejected unless negative: theta>0 (pole tips RIGHT) must command
+  u>0. `src/lqr_gains.h` is now only the power-on default; live gains live in
+  `control.c` (`g_lqr_k[]`) and reset to the header values on reboot.
+- The web LQR solver fixes R=1 because K depends only on the Q:R ratio; keep
+  `web/src/lqr.js` and `tools/lqr_design.py` in sync if you change the model.

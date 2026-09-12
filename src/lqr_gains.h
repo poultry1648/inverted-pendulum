@@ -13,10 +13,10 @@
  *     B = [ 0 ; 1 ; 0 ; -1/l ; 0 ]
  *
  * Parameters:
- *     l = 0.15 m   (pivot -> pole center of mass; half a uniform rod's length)
+ *     l = 0.2 m   (pivot -> pole center of mass; half a uniform rod's length)
  *     g = 9.81 m/s^2
  * Weights:
- *     Q = diag([1.0, 0.1, 100.0, 10.0, 1.0])   R = [0.5]
+ *     Q = diag([1.0, 1.0, 100.0, 10.0, 1.0])   R = [0.1]
  *       Q0 x        cart position pull toward x_ref (via K0)
  *       Q1 xdot     light cart-velocity damping
  *       Q2 theta    upright angle penalty (main aggressiveness knob)
@@ -25,15 +25,15 @@
  *       R           control-effort penalty (larger = gentler cart motion)
  * Solver: numpy Hamiltonian eigen-decomposition (scipy not installed)
  * Regenerate with:
- *     python3 tools/lqr_design.py --l 0.15 --q 1.0,0.1,100.0,10.0 --qxi 1.0 --r 0.5
+ *     python3 tools/lqr_design.py --l 0.2 --q 1.0,1.0,100.0,10.0 --qxi 1.0 --r 0.1
  */
 #ifndef LQR_GAINS_H
 #define LQR_GAINS_H
 
-#define LQR_K0 -3.865449f   /* (x - x_ref) error, 1/m */
-#define LQR_K1 -4.575581f   /* xdot, s/m */
-#define LQR_K2 -38.422375f   /* theta, 1/rad */
-#define LQR_K3 -6.286093f   /* thetadot, s/rad */
-#define LQR_K4 -1.414214f   /* xi = integral of (x - x_ref), 1/(m*s) */
+#define LQR_K0 -8.695718f   /* (x - x_ref) error, 1/m */
+#define LQR_K1 -10.374724f   /* xdot, s/m */
+#define LQR_K2 -69.745504f   /* theta, 1/rad */
+#define LQR_K3 -13.371074f   /* thetadot, s/rad */
+#define LQR_K4 -3.162278f   /* xi = integral of (x - x_ref), 1/(m*s) */
 
 #endif /* LQR_GAINS_H */

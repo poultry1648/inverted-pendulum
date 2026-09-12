@@ -249,6 +249,37 @@ button:disabled {
   width: 100%;
 }
 
+.param input[type="range"] {
+  padding: 0;
+  border: none;
+  background: transparent;
+  accent-color: var(--accent);
+}
+
+.wval {
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
+}
+
+.lqr-out {
+  margin: 14px 0 0;
+  padding: 12px 14px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  font-size: 12.5px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+}
+
+#lqr-apply {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
 #calmode.active,
 #balance.active {
   border-color: var(--accent);

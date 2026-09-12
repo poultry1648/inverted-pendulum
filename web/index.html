@@ -48,6 +48,7 @@
           <button type="button" data-delta="1" disabled>+1 mm</button>
           <button type="button" data-delta="10" disabled>+10 mm</button>
           <button id="go-zero" type="button" disabled>Go to 0</button>
+          <button id="go-center" type="button" disabled>Go to 175</button>
           <button id="home" type="button" disabled>Home</button>
         </div>
         <div class="sub">Target range 0..<span id="max-travel">350</span> mm</div>
@@ -103,6 +104,44 @@
         <div class="sub">
           state: <span id="balance-state">off</span> &middot;
           hold the pole near upright, then release once it engages
+        </div>
+      </section>
+
+      <section class="controls">
+        <h2>LQR design (Q &rarr; K)</h2>
+        <div class="sub">
+          Weights are solved to gains in the browser, same math as
+          <code>tools/lqr_design.py</code>. Only the ratio of Q to R matters, so
+          R is fixed at 1. Drag a weight to re-solve; poles update live.
+        </div>
+        <div id="lqr-weights" class="param-grid"></div>
+        <div class="param-grid">
+          <label class="param">
+            <span class="param-label">pole COM l (m)</span>
+            <input id="lqr-l" type="number" step="0.01" min="0.02" max="1" value="0.2" disabled />
+          </label>
+          <label class="param">
+            <span class="param-label">gravity g (m/s&sup2;)</span>
+            <input id="lqr-g" type="number" step="0.01" min="1" max="20" value="9.81" disabled />
+          </label>
+        </div>
+        <pre id="lqr-out" class="lqr-out">--</pre>
+        <div class="param-grid">
+          <label class="param">
+            <span class="param-label">xi clamp (m&middot;s)</span>
+            <input id="lqr-xiclamp" type="number" step="0.5" min="0" max="100" value="3" disabled />
+          </label>
+          <label class="param">
+            <span class="param-label">center deadband (mm)</span>
+            <input id="lqr-deadband" type="number" step="1" min="0" max="100" value="15" disabled />
+          </label>
+          <label class="param">
+            <span class="param-label">x_ref slew (mm/s)</span>
+            <input id="lqr-slew" type="number" step="5" min="0" max="1000" value="40" disabled />
+          </label>
+        </div>
+        <div class="buttons">
+          <button id="lqr-apply" type="button" disabled>Apply to firmware</button>
         </div>
       </section>
 

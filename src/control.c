@@ -38,11 +38,28 @@
  * any small upright-calibration bias (a constant theta offset otherwise looks
  * like a constant acceleration and makes the cart creep to one end).
  * LQR_XI_CLAMP bounds the position-error integral (m*s) against windup. The
- * steady xi that cancels a theta bias b is -LQR_K2*b/LQR_K4, so 5.0 covers
- * roughly a 7 deg zero error; if the reported xi sits at the clamp the cart
- * will creep, which is the signal to re-zero or raise this. */
-#define CART_CENTER_MM    (AXIS_TRAVEL_MM * 0.5f)
-#define LQR_XI_CLAMP      5.0f
+ * steady xi that cancels a theta bias b is -LQR_K2*b/LQR_K4, so 3.0 covers
+ * roughly a 4.5 deg zero error (its acceleration contribution is capped at
+ * |LQR_K4|*3 ~= 2.5 m/s^2). Keeping it modest matters: a big windup lets a
+ * disturbance launch the cart end to end. If the reported xi sits at the clamp
+ * the cart will creep, which is the signal to re-zero or raise this.
+ * CENTER_DEADBAND_MM freezes the integrator near the target so it cannot hunt,
+ * and X_REF_SLEW_MM_S ramps x_ref instead of stepping it (a hard recenter after
+ * a catch/disarm pumps the pole and causes a full-range limit cycle).
+ *
+ * The #defines below are the power-on defaults; the live values are the g_*
+ * globals (tunable over USB via `set k0..k4|xiclamp|deadband|slew`). */
+#define CART_CENTER_MM     (AXIS_TRAVEL_MM * 0.5f)
+#define LQR_XI_CLAMP       3.0f
+#define CENTER_DEADBAND_MM 15.0f
+#define X_REF_SLEW_MM_S    40.0f
+
+/* Live-tunable LQR parameters. K defaults come from lqr_gains.h. K2 must stay
+ * negative (theta>0 -> accelerate RIGHT); SET_K2_MAX enforces it. */
+static float g_lqr_k[5] = { LQR_K0, LQR_K1, LQR_K2, LQR_K3, LQR_K4 };
+static float g_xi_clamp          = LQR_XI_CLAMP;
+static float g_center_deadband_mm = CENTER_DEADBAND_MM;
+static float g_x_ref_slew_mm_s    = X_REF_SLEW_MM_S;
 
 /* ---- Core 0 -> core 1 commands: SDK queue (core-safe, never blocks) ---- */
 typedef struct { uint8_t type, mode; float value; } cmd_t;
@@ -87,7 +104,8 @@ static float          g_vel       = 50.0f;   /* mm/s */
 static lqr_state_t g_lqr_state = LQR_OFF;
 static float       g_lqr_v_cmd = 0.0f;   /* mm/s: integrates the accel command */
 static float       g_lqr_xi    = 0.0f;   /* m*s: integral of (x - x_ref) */
-static float       g_x_ref_mm  = 0.0f;   /* cart target; center by default */
+static float       g_x_ref_mm  = 0.0f;   /* slewed cart reference */
+static float       g_x_ref_target_mm = CART_CENTER_MM; /* desired reference */
 
 static float g_x_prev     = 0.0f;
 static float g_theta_prev = 0.0f;
@@ -123,13 +141,15 @@ static void apply_cmd(uint8_t type, uint8_t mode, float value) {
         g_lqr_state = LQR_OFF;          /* `stop` leaves balance mode */
         g_lqr_v_cmd = 0.0f;
         g_lqr_xi    = 0.0f;
+        g_x_ref_target_mm = CART_CENTER_MM;
         break;
     case CMD_GO:     if (g_mode == CTRL_MODE_IDLE) g_mode = CTRL_MODE_POSITION_HOLD; break;
     case CMD_TARGET:
         g_target_mm = value;
-        /* While balancing a numeric target is a soft cart recentering, not a
-         * mode switch; otherwise it selects position-hold as before. */
-        if (g_mode == CTRL_MODE_LQR) g_x_ref_mm = value;
+        /* While balancing a numeric target is a soft cart recentering (the
+         * reference slews toward it), not a mode switch; otherwise it selects
+         * position-hold as before. */
+        if (g_mode == CTRL_MODE_LQR) g_x_ref_target_mm = value;
         else                         g_mode = CTRL_MODE_POSITION_HOLD;
         break;
     case CMD_MODE:
@@ -139,6 +159,7 @@ static void apply_cmd(uint8_t type, uint8_t mode, float value) {
                 g_lqr_state = LQR_WAITING;   /* re-arms on every entry */
                 g_lqr_v_cmd = 0.0f;
                 g_lqr_xi    = 0.0f;
+                g_x_ref_target_mm = CART_CENTER_MM;
             } else {
                 g_lqr_state = LQR_OFF;
             }
@@ -159,6 +180,7 @@ static void apply_cmd(uint8_t type, uint8_t mode, float value) {
             g_lqr_state = LQR_WAITING;
             g_lqr_v_cmd = 0.0f;
             g_lqr_xi    = 0.0f;
+            g_x_ref_target_mm = CART_CENTER_MM;
         }
         break;
     case CMD_ZERO:
@@ -179,6 +201,26 @@ static void apply_cmd(uint8_t type, uint8_t mode, float value) {
             motion_fault_clear();
         }
         break;
+    case CMD_SET:
+        /* Live LQR tuning. Core 0 range-checks and reports; this is the final
+         * guard on core 1 so a NaN or wrong-signed gain can never reach the
+         * law. Out-of-range values are dropped. */
+        if (mode >= PARAM_COUNT || !isfinite(value)) break;
+        if (mode <= PARAM_K4) {
+            if (mode == PARAM_K2 && value >= 0.0f) break;   /* sign contract */
+            if (value < -500.0f || value > 500.0f) break;
+            g_lqr_k[mode] = value;
+        } else if (mode == PARAM_XI_CLAMP) {
+            if (value < 0.0f || value > 100.0f) break;
+            g_xi_clamp = value;
+        } else if (mode == PARAM_DEADBAND) {
+            if (value < 0.0f || value > 100.0f) break;
+            g_center_deadband_mm = value;
+        } else if (mode == PARAM_SLEW) {
+            if (value < 0.0f || value > 1000.0f) break;
+            g_x_ref_slew_mm_s = value;
+        }
+        break;
     }
 }
 
@@ -191,19 +233,28 @@ static float lqr_velocity(float x_mm, float xdot_mm_s,
                           float theta_deg, float thetadot_deg_s) {
     if (g_lqr_state != LQR_ACTIVE) return 0.0f;
 
+    /* Slew the reference toward its target instead of stepping: a hard recenter
+     * pumps the pole and can start a full-range oscillation. */
+    float dref = g_x_ref_target_mm - g_x_ref_mm;
+    float step = g_x_ref_slew_mm_s * DT_S;
+    g_x_ref_mm += fmaxf(-step, fminf(step, dref));
+
     float dx  = (x_mm - g_x_ref_mm) * 1e-3f;   /* m   */
     float xd  = xdot_mm_s * 1e-3f;             /* m/s */
     float th  = theta_deg * DEG2RAD;           /* rad */
     float thd = thetadot_deg_s * DEG2RAD;      /* rad/s */
 
     /* Position-error integral: drives steady-state cart error to zero (and so
-     * rejects the theta-bias creep). Clamped for anti-windup. */
-    g_lqr_xi += dx * DT_S;
-    if (g_lqr_xi >  LQR_XI_CLAMP) g_lqr_xi =  LQR_XI_CLAMP;
-    if (g_lqr_xi < -LQR_XI_CLAMP) g_lqr_xi = -LQR_XI_CLAMP;
+     * rejects the theta-bias creep). Frozen inside the deadband (no hunting)
+     * and clamped for anti-windup. */
+    if (fabsf(dx) > g_center_deadband_mm * 1e-3f) {
+        g_lqr_xi += dx * DT_S;
+        if (g_lqr_xi >  g_xi_clamp) g_lqr_xi =  g_xi_clamp;
+        if (g_lqr_xi < -g_xi_clamp) g_lqr_xi = -g_xi_clamp;
+    }
 
-    float u = -(LQR_K0 * dx + LQR_K1 * xd + LQR_K2 * th + LQR_K3 * thd
-                + LQR_K4 * g_lqr_xi);
+    float u = -(g_lqr_k[0] * dx + g_lqr_k[1] * xd + g_lqr_k[2] * th
+                + g_lqr_k[3] * thd + g_lqr_k[4] * g_lqr_xi);
 
     g_lqr_v_cmd += u * 1000.0f * DT_S;         /* m/s^2 -> mm/s */
     if (g_lqr_v_cmd >  MAX_CART_VEL_MM_S) g_lqr_v_cmd =  MAX_CART_VEL_MM_S;
@@ -215,16 +266,17 @@ static float lqr_velocity(float x_mm, float xdot_mm_s,
  * pole is near upright and slow, ACTIVE -> WAITING (auto-recatch) on a large
  * tilt. MAX_TILT_DEG has already been enforced as the hard backstop while
  * ACTIVE by the time a disengage happens. */
-static void lqr_update_state(float theta_deg, float thetadot_deg_s) {
+static void lqr_update_state(float x_mm, float theta_deg, float thetadot_deg_s) {
     if (g_mode != CTRL_MODE_LQR) { g_lqr_state = LQR_OFF; return; }
 
     if (g_lqr_state == LQR_WAITING) {
         if (fabsf(theta_deg) < ARM_TILT_DEG &&
             fabsf(thetadot_deg_s) < ARM_RATE_DPS) {
             g_lqr_state = LQR_ACTIVE;
-            g_lqr_v_cmd = 0.0f;            /* start from rest */
-            g_lqr_xi    = 0.0f;            /* no inherited centering windup */
-            g_x_ref_mm  = CART_CENTER_MM;  /* balance about mid-travel */
+            g_lqr_v_cmd = 0.0f;               /* start from rest */
+            g_lqr_xi    = 0.0f;               /* no inherited windup */
+            g_x_ref_mm  = x_mm;               /* start where we are... */
+            g_x_ref_target_mm = CART_CENTER_MM; /* ...and slew to center */
         }
     } else if (g_lqr_state == LQR_ACTIVE) {
         if (fabsf(theta_deg) > DISARM_TILT_DEG) {
@@ -342,7 +394,7 @@ static void control_core1_entry(void) {
 
         /* LQR auto-arm: engage near upright, disengage on a large tilt. Skipped
          * while faulted so a reset is required to recover. */
-        if (!g_faulted) lqr_update_state(theta, g_thetadot);
+        if (!g_faulted) lqr_update_state(x_mm, theta, g_thetadot);
 
         float v_cmd;
         if (g_faulted) {
@@ -379,6 +431,10 @@ static void control_core1_entry(void) {
             .lqr_state = (uint8_t)g_lqr_state,
             .x_ref_mm = g_x_ref_mm,
             .lqr_xi = g_lqr_xi,
+            .lqr_k = { g_lqr_k[0], g_lqr_k[1], g_lqr_k[2], g_lqr_k[3], g_lqr_k[4] },
+            .xi_clamp = g_xi_clamp,
+            .center_deadband_mm = g_center_deadband_mm,
+            .x_ref_slew_mm_s = g_x_ref_slew_mm_s,
         };
         telemetry_publish(&t);
         g_tick++;
@@ -386,6 +442,6 @@ static void control_core1_entry(void) {
 }
 
 void control_start(void) {
-    queue_init(&g_cmd_q, sizeof(cmd_t), 8);
+    queue_init(&g_cmd_q, sizeof(cmd_t), 16);   /* Apply sends 8 at once */
     multicore_launch_core1(control_core1_entry);
 }

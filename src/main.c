@@ -57,6 +57,20 @@ static int mode_from_name(const char *s) {
     return s[0] >= '0' && s[0] <= '9' ? atoi(s) : -1;
 }
 
+/* Live-tunable LQR parameter names accepted by `set`. */
+static int param_from_name(const char *s) {
+    if (!s) return -1;
+    if (!strcmp(s, "k0")) return PARAM_K0;
+    if (!strcmp(s, "k1")) return PARAM_K1;
+    if (!strcmp(s, "k2")) return PARAM_K2;
+    if (!strcmp(s, "k3")) return PARAM_K3;
+    if (!strcmp(s, "k4")) return PARAM_K4;
+    if (!strcmp(s, "xiclamp") || !strcmp(s, "xi")) return PARAM_XI_CLAMP;
+    if (!strcmp(s, "deadband") || !strcmp(s, "db")) return PARAM_DEADBAND;
+    if (!strcmp(s, "slew")) return PARAM_SLEW;
+    return -1;
+}
+
 static void handle_line(char *line) {
     char *cmd = strtok(line, " \t");
     char *arg = strtok(NULL, " \t");
@@ -101,6 +115,36 @@ static void handle_line(char *line) {
                    t.calmode ? "on" : "off");
         } else {
             printf("calstatus: telemetry busy, retry\n");
+        }
+    } else if (!strcmp(cmd, "set")) {
+        char *val = strtok(NULL, " \t");
+        if (!arg || !val) {
+            printf("usage: set k0..k4|xiclamp|deadband|slew <value>\n");
+            return;
+        }
+        int p = param_from_name(arg);
+        if (p < 0) { printf("set: unknown param \"%s\"\n", arg); return; }
+        char *end;
+        float v = strtof(val, &end);
+        if (end == val || !isfinite(v)) {
+            printf("set: bad value \"%s\"\n", val);
+            return;
+        }
+        if (p == PARAM_K2 && v >= 0.0f) {
+            printf("set: k2 must be negative (theta>0 -> accelerate RIGHT)\n");
+            return;
+        }
+        control_post_cmd(CMD_SET, (uint8_t)p, v);
+        printf("%s = %.6f\n", arg, v);
+    } else if (!strcmp(cmd, "gains")) {
+        telemetry_t t;
+        if (control_get_telemetry(&t)) {
+            printf("gains k0=%.6f k1=%.6f k2=%.6f k3=%.6f k4=%.6f\n",
+                   t.lqr_k[0], t.lqr_k[1], t.lqr_k[2], t.lqr_k[3], t.lqr_k[4]);
+            printf("limits xiclamp=%.3f deadband=%.2f slew=%.2f\n",
+                   t.xi_clamp, t.center_deadband_mm, t.x_ref_slew_mm_s);
+        } else {
+            printf("gains: telemetry busy, retry\n");
         }
     } else if (!strcmp(cmd, "mode")) {
         int m = mode_from_name(arg);
@@ -151,6 +195,8 @@ int main(void) {
     printf("  balance    LQR balance, auto-arms when the pole is near upright\n");
     printf("  mode hold|vel|square|sine|idle|lqr\n");
     printf("  vel <mm/s>  amp <mm/s>  freq <hz>  kp <gain>\n");
+    printf("  set k0..k4 <gain> | xiclamp | deadband | slew   (live LQR tuning)\n");
+    printf("  gains      print live LQR gains and limits\n");
     printf("Calibration (theta is signed from upright, +RIGHT):\n");
     printf("  calmode on|off   suspend/restore the tilt safety trip\n");
     printf("  zero             hold pole vertical; average ~1 s -> theta=0\n");

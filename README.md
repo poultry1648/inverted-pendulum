@@ -1,5 +1,7 @@
 # SKR Pico Inverted Pendulum
 
+![Cart-pole balancing demo](docs/demo.avif)
+
 Bare-metal C firmware that turns a **BIGTREETECH SKR Pico v1.0** (RP2040) into a
 real-time controller for a **cart-pole inverted pendulum**. A belt-driven cart
 runs along a rail and a potentiometer at the pivot measures the pole's angle; the
